@@ -1,8 +1,9 @@
 #ifndef USERPROG_PROCESS_H
 #define USERPROG_PROCESS_H
 
-#include "threads/thread.h"
 #include <stdint.h>
+#include "userprog/fdtable.h"
+#include "threads/thread.h"
 
 // At most 8MB can be allocated to the stack
 // These defines will be used in Project 2: Multithreading
@@ -27,6 +28,7 @@ struct process {
   uint32_t* pagedir;          /* Page directory. */
   char process_name[16];      /* Name of the main thread */
   struct thread* main_thread; /* Pointer to main thread */
+  fdtable* fdtable;
 };
 
 void userprog_init(void);
@@ -43,5 +45,7 @@ tid_t pthread_execute(stub_fun, pthread_fun, void*);
 tid_t pthread_join(tid_t);
 void pthread_exit(void);
 void pthread_exit_main(void);
+
+struct process* process_current(void);
 
 #endif /* userprog/process.h */

@@ -100,6 +100,7 @@ struct thread {
 
   /* Owned by thread.c. */
   unsigned magic; /* Detects stack overflow. */
+  int exit_status;
 };
 
 /* Types of scheduler that the user can request the kernel

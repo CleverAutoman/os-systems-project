@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
@@ -19,12 +21,15 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/fdtable.h"
 
 static struct semaphore temporary;
 static thread_func start_process NO_RETURN;
 static thread_func start_pthread NO_RETURN;
 static bool load(const char* file_name, void (**eip)(void), void** esp);
 bool setup_thread(void (**eip)(void), void** esp);
+static size_t file_name_length(const char* file_name);
+static char** split_file_name(const char* file_name, size_t ct);
 
 /* Initializes user programs in the system by ensuring the main
    thread has a minimal PCB so that it can execute and wait for
@@ -62,10 +67,26 @@ pid_t process_execute(const char* file_name) {
     return TID_ERROR;
   strlcpy(fn_copy, file_name, PGSIZE);
 
+  /* get the first token as file_name */
+  char* file_name_ = malloc(sizeof(void*));
+  size_t i = 0;
+  bool replaced = false;
+  for (; file_name[i] != '\0'; i++) {
+    if (isspace((unsigned char)file_name[i])) {
+      break;
+    }
+  }
+  if (i != 0) {
+    memcpy(file_name_, &file_name[0], i);
+    file_name_[i] = '\0';
+  }
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create(file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create(file_name_, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page(fn_copy);
+
+  free(file_name_);
   return tid;
 }
 
@@ -91,7 +112,17 @@ static void start_process(void* file_name_) {
     // Continue initializing the PCB as normal
     t->pcb->main_thread = t;
     strlcpy(t->pcb->process_name, t->name, sizeof t->name);
+
+    /* initialize fdtable */
+    t->pcb->fdtable = malloc(sizeof(struct fdtable));
+    ASSERT(t->pcb->fdtable != NULL);
+    fdtable_create(t->pcb->fdtable, 512);
   }
+
+  /* argument passing */
+  /* 1. split file_name and args if_.esp == 3222319104 */
+  size_t ct = file_name_length(file_name);
+  char** str_lst = split_file_name(file_name, ct); // l = ct + 1(NULL) + 1(ct)
 
   /* Initialize interrupt frame and load executable. */
   if (success) {
@@ -99,7 +130,8 @@ static void start_process(void* file_name_) {
     if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
     if_.cs = SEL_UCSEG;
     if_.eflags = FLAG_IF | FLAG_MBS;
-    success = load(file_name, &if_.eip, &if_.esp);
+    success = load(str_lst[0], &if_.eip, &if_.esp);
+    // success = load(file_name, &if_.eip, &if_.esp);
   }
 
   /* Handle failure with succesful PCB malloc. Must free the PCB */
@@ -112,12 +144,77 @@ static void start_process(void* file_name_) {
     free(pcb_to_free);
   }
 
+  /* 2. write data into stack esp == 3221225472 */
+  // move stack ptr
+  size_t capacity = 0;
+
+  for (int i = 0; i < ct; i++) {
+    capacity += strlen(str_lst[i]) + 1;
+  }
+  // track addr of each var
+  char* arg_addr[ct];
+
+  if_.esp -= capacity;
+  uint8_t* pt = (uint8_t*)if_.esp;
+  // write on the stack
+  for (int i = 0; i < ct; i++) {
+    size_t l = strlen(str_lst[i]) + 1;
+    memcpy(pt, str_lst[i], l);
+    arg_addr[i] = (char*)pt;
+    pt += l;
+  }
+
+  /* 3. padding in 4-byte */
+  while (((uintptr_t)if_.esp) % 4 != 0) { // 3221225458
+    if_.esp = (uint8_t*)if_.esp - 1;
+    *(uint8_t*)if_.esp = 0;
+  }
+
+  /* 4. allocate stack for address and fill them 
+        16-byte padding before argc and &argv */
+  if_.esp -= (ct + 1) * sizeof(void*); // NULL ptr
+  pt = (uint8_t*)if_.esp;
+  for (int i = 0; i < ct; i++) {
+    memcpy(pt, &arg_addr[i], sizeof(void*));
+    pt += sizeof(void*);
+  }
+  *(void**)pt = NULL;          // fill NULL ptr
+  void* argv = (void*)if_.esp; // track &argv
+
+  // padding in 16-byte padding
+  while (((uintptr_t)if_.esp - 3 * sizeof(void*)) % 16 != 0) {
+    if_.esp = (uint8_t*)if_.esp - 1;
+    *(uint8_t*)if_.esp = 0;
+  }
+
+  // fill &argv and argc
+  if_.esp -= sizeof(void*);
+  *(void**)if_.esp = argv;
+
+  if_.esp -= sizeof(int);
+  *(int*)if_.esp = ct;
+
+  if_.esp -= sizeof(void*);
+  *(void**)if_.esp = 0;
+
+  // if_.esp -= 32;
+  // *(int*)if_.esp = 1;
+  // if_.esp -= 4;
+
   /* Clean up. Exit on failure or jump to userspace */
   palloc_free_page(file_name);
   if (!success) {
     sema_up(&temporary);
     thread_exit();
   }
+
+  if (str_lst != NULL) {
+    for (int i = 0; str_lst[i] != NULL; i++)
+      free(str_lst[i]);
+    free(str_lst);
+  }
+
+  // hex_dump((uintptr_t)if_.esp, (void*)if_.esp, 512, true);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -127,6 +224,72 @@ static void start_process(void* file_name_) {
      and jump to it. */
   asm volatile("movl %0, %%esp; jmp intr_exit" : : "g"(&if_) : "memory");
   NOT_REACHED();
+}
+
+static size_t file_name_length(const char* file_name) {
+  size_t ct = 0;
+  bool has_word = false;
+  for (size_t i = 0; file_name[i] != '\0'; i++) {
+    if (isspace((unsigned char)file_name[i])) {
+      if (has_word) {
+        ct++;
+        has_word = false;
+      }
+    } else {
+      has_word = true;
+    }
+  }
+  if (has_word)
+    ct++;
+  return ct;
+}
+
+static char** split_file_name(const char* file_name, size_t ct) {
+  char** res = malloc((ct + 1) * sizeof(char*));
+  size_t index = 0;
+  if (!res) {
+    printf("ERROR: malloc list failed!\n");
+    return NULL;
+  }
+
+  size_t slow = 0;
+  bool has_word = false;
+  for (size_t i = 0; file_name[i] != '\0'; i++) {
+    if (isspace((unsigned char)file_name[i])) {
+      if (has_word) {
+        // copy into list
+        size_t len = i - slow;
+        char* cur_str = malloc(len + 1);
+        if (!cur_str) {
+          printf("ERROR: malloc cur_Str failed!\n");
+          return NULL;
+        }
+        // fill '\0'
+        memcpy(cur_str, &file_name[slow], len);
+        cur_str[len] = '\0';
+        res[index++] = cur_str;
+        has_word = false;
+      }
+      slow = i + 1;
+    } else {
+      has_word = true;
+    }
+  }
+  size_t total_len = strlen(file_name);
+  if (has_word && slow < total_len) {
+    size_t len = total_len - slow;
+    char* cur_str = malloc(len + 1);
+    if (!cur_str) {
+      printf("ERROR: malloc cur_str failed!\n");
+      return NULL;
+    }
+
+    memcpy(cur_str, file_name + slow, len);
+    cur_str[len] = '\0';
+    res[index++] = cur_str;
+  }
+  res[index] = NULL;
+  return res;
 }
 
 /* Waits for process with PID child_pid to die and returns its exit status.
@@ -148,6 +311,8 @@ void process_exit(void) {
   struct thread* cur = thread_current();
   uint32_t* pd;
 
+  printf("%s: exit(%d)\n", cur->pcb->process_name, cur->exit_status);
+
   /* If this thread does not have a PCB, don't worry */
   if (cur->pcb == NULL) {
     thread_exit();
@@ -168,6 +333,11 @@ void process_exit(void) {
     cur->pcb->pagedir = NULL;
     pagedir_activate(NULL);
     pagedir_destroy(pd);
+  }
+
+  fdtable* fdt = cur->pcb->fdtable;
+  if (fdt) {
+    free_table(fdt);
   }
 
   /* Free the PCB of this process and kill this thread
@@ -562,3 +732,7 @@ void pthread_exit(void) {}
    This function will be implemented in Project 2: Multithreading. For
    now, it does nothing. */
 void pthread_exit_main(void) {}
+
+struct process* process_current(void) {
+  return thread_current()->pcb;
+}
