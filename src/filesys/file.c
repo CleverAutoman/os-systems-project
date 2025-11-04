@@ -30,7 +30,13 @@ struct file* file_open(struct inode* inode) {
 /* Opens and returns a new file for the same inode as FILE.
    Returns a null pointer if unsuccessful. */
 struct file* file_reopen(struct file* file) {
-  return file_open(inode_reopen(file->inode));
+  struct inode* ino = inode_reopen(file->inode);
+  if (!ino)
+    return NULL;
+  struct file* nf = file_open(ino);
+  // printf("REOPEN src=%p deny=%d inode=%p -> new=%p deny=%d inode=%p\n",
+  //     file, file->deny_write, file->inode, nf, nf->deny_write, nf->inode);
+  return nf;
 }
 
 /* Closes FILE. */
@@ -75,6 +81,8 @@ off_t file_read_at(struct file* file, void* buffer, off_t size, off_t file_ofs) 
    not yet implemented.)
    Advances FILE's position by the number of bytes read. */
 off_t file_write(struct file* file, const void* buffer, off_t size) {
+  if (file->deny_write)
+    return 0;
   off_t bytes_written = inode_write_at(file->inode, buffer, size, file->pos);
   file->pos += bytes_written;
   return bytes_written;

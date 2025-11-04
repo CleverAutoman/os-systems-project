@@ -291,6 +291,7 @@ void thread_exit(void) {
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
      when it calls thread_switch_tail(). */
+  // printf("file_name before thread_exit: %s\n", thread_current()->pcb->process_name);
   intr_disable();
   list_remove(&thread_current()->allelem);
   thread_current()->status = THREAD_DYING;
@@ -395,6 +396,7 @@ static void kernel_thread(thread_func* function, void* aux) {
   ASSERT(function != NULL);
 
   intr_enable(); /* The scheduler runs with interrupts off. */
+
   function(aux); /* Execute the thread function. */
   thread_exit(); /* If function() returns, kill the thread. */
 }

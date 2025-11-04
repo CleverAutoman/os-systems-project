@@ -61,7 +61,9 @@ struct file* filesys_open(const char* name) {
     dir_lookup(dir, name, &inode);
   dir_close(dir);
 
-  return file_open(inode);
+  struct file* f = file_open(inode);
+  printf("file = %p, name = %s\n", f, name);
+  return f;
 }
 
 /* Deletes the file named NAME.

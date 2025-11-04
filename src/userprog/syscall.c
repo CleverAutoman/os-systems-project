@@ -1,33 +1,73 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
-#include "threads/interrupt.h"
+// #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "userprog/process.h"
+#include "userprog/pagedir.h"
+#include "devices/input.h"
 #include "lib/kernel/console.h"
 #include "threads/synch.h"
 #include "filesys/file.h"
+#include "filesys/filesys.h"
 #include "lib/syscall-nr.h"
 
 static void syscall_handler(struct intr_frame*);
 
+bool is_valid_user_ptr(const void* uaddr);
+
+bool is_valid_user_range(const void* uaddr, size_t range);
+
 static size_t MAX_BUFFER_SIZE = 1024;
 static struct lock console_lock;
+static struct lock filesys_lock;
 
 void syscall_init(void) {
   intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall");
   lock_init(&console_lock);
+  lock_init(&filesys_lock);
 }
 
 static inline fdtable* cur_fdt(void) {
   struct process* p = process_current();
   ASSERT(p != NULL);
-  return &p->fdtable;
+  return p->fdtable;
+}
+
+static void copy_in(void* dest, const void* source, size_t size) {
+  if (!is_valid_user_range(source, size)) {
+    process_exit();
+  }
+  memcpy(dest, source, size);
+}
+
+static bool is_valid_str(const void* ptr) {
+  const char* str = ptr;
+  size_t i = 0;
+
+  while (true) {
+    if (!is_valid_user_ptr(str + i)) {
+      return false;
+    }
+    if (str[i] == '\0') {
+      break;
+    }
+    i++;
+  }
+  return true;
 }
 
 static void syscall_handler(struct intr_frame* f UNUSED) {
   // printf("syscall entry: eax=%d\n", (int)f->eax);
   uint32_t* args = ((uint32_t*)f->esp);
+  // printf("about to read syscall num\n");
+  // uint32_t num = args[0];
+  // printf("syscall num = %u\n", num);
+
+  if (!is_valid_user_range(args, sizeof(uint32_t))) {
+    process_exit();
+    return;
+  }
 
   /*
    * The following print statement, if uncommented, will print out the syscall
@@ -36,124 +76,423 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
    * include it in your final submission.
    */
 
-  // printf("System call number: %d\n", args[0]);
+  // printf("System call number: %d, with thread: %d\n", args[0], thread_current()->tid);
+  // printf("continueds;\n");
+  switch (args[0]) {
+    // File Operations
+    case SYS_CREATE: {
+      // printf("entered create\n");
+      if (!is_valid_str(args[1])) {
+        process_exit();
+      }
+      if (!is_valid_user_range(args + 1 * 2, sizeof(unsigned))) {
+        process_exit();
+      }
+      const char* file = (const char*)(args[1]);
+      unsigned initial_size = (unsigned)(args[2]);
+      f->eax = create(file, initial_size);
+      break;
+    }
+    case SYS_REMOVE: {
+      if (!is_valid_str(args[1]))
+        process_exit();
+      const char* file = (const char*)args[1];
+      f->eax = remove(file); // 调用封装好的安全接口
+      break;
+    }
+    case SYS_OPEN: {
+      if (!is_valid_str(args[1])) {
+        // printf("open invalid and exited\n");
+        process_exit();
+      }
+      const char* file = (const char*)(args[1]);
+      if (!file || !is_valid_user_ptr(file)) {
+        // printf("open invalid ptr\n");
+        process_exit();
+      }
+      f->eax = open(file);
 
-  if (args[0] == SYS_PRACTICE) {
-    int n = *(int*)(f->esp + 4); // Pintos 32-bit, 第一个参数
-    f->eax = n + 1;
+      // printf("thread opened success: %d with file: %s with fd == %d\n", thread_current()->tid, file, f->eax);
+      break;
+    }
+    case SYS_FILESIZE: {
+      if (!is_valid_user_range(args, 2 * sizeof(int))) {
+        process_exit();
+      }
+      const int fd = (int)(args[1]);
+      // if (!file) {
+      //   process_exit();
+      // }
+      f->eax = filesize(fd);
+      break;
+    }
+    case SYS_READ: {
+      if (!is_valid_user_range(args, 4 * sizeof(int))) {
+        process_exit();
+      }
+      const int fd = (int)(args[1]);
+      void* buffer = args[2];
+      unsigned initial_size = (unsigned)(args[3]);
+      if (fd < 0 || fd > INT_MAX) {
+        process_exit();
+      }
+      if (!is_valid_user_range(buffer, initial_size)) {
+        process_exit();
+      }
+      // printf("filename: %d\n", fd);
+      f->eax = read(fd, buffer, initial_size);
+      break;
+    }
+    case SYS_WRITE: {
+      if (!is_valid_user_range(args, 4 * sizeof(int))) {
+        process_exit();
+      }
+      const int fd = (int)(args[1]);
+      void* buffer = args[2];
+      unsigned initial_size = (unsigned)(args[3]);
+      if (fd < 0 || fd > INT_MAX) {
+        process_exit();
+      }
+      if (!is_valid_user_range(buffer, initial_size)) {
+        process_exit();
+      }
+      f->eax = write(fd, buffer, initial_size);
+
+      break;
+    }
+    case SYS_SEEK: {
+      if (!is_valid_user_range(args, 3 * sizeof(int))) {
+        process_exit();
+      }
+      const int fd = (int)(args[1]);
+      unsigned position = (unsigned)(args[2]);
+      if (fd < 0 || fd > INT_MAX) {
+        process_exit();
+      }
+      seek(fd, position);
+      break;
+    }
+    case SYS_TELL: {
+      if (!is_valid_user_range(args, 2 * sizeof(int))) {
+        process_exit();
+      }
+      const int fd = (int)(args[1]);
+      if (fd < 0 || fd > INT_MAX) {
+        process_exit();
+      }
+      f->eax = tell(fd);
+      break;
+    }
+    case SYS_CLOSE: {
+      // printf("entered closed\n");
+      if (!is_valid_user_range(args, 2 * sizeof(int))) {
+        // printf("exited\n");
+        process_exit();
+      }
+      const int fd = (int)(args[1]);
+      if (fd < 0 || fd > INT_MAX) {
+        // printf("invalid with id=%d\n", fd);
+        process_exit();
+      }
+      // printf("close fd = %d\n", fd);
+      close(fd);
+      break;
+    }
+
+    // Process Control Operations
+    case SYS_PRACTICE: {
+      if (!is_valid_user_range(args, 2 * sizeof(int))) {
+        process_exit();
+      }
+      const int input = (int)(args[1]);
+      f->eax = input + 1;
+      break;
+    }
+    case SYS_HALT:
+      halt();
+      break;
+    case SYS_EXIT:
+      sys_exit(f);
+      break;
+    case SYS_EXEC: {
+      if (!is_valid_str(args[1])) {
+        process_exit();
+      }
+      const char* file = (const char*)(args[1]);
+      f->eax = exec(file);
+      break;
+    }
+    case SYS_WAIT: {
+      if (!is_valid_user_range(args, 2 * sizeof(int))) {
+        process_exit();
+      }
+      const int pid = (int)(args[1]);
+      f->eax = wait(pid);
+      break;
+    }
+    case SYS_FORK: {
+      f->eax = fork(f);
+      break;
+    }
+    default:
+      printf("Unknown Syscall: %d\n", args[0]);
+      break;
+  }
+}
+
+bool is_valid_user_ptr(const void* uaddr) {
+  return (uaddr && is_user_vaddr(uaddr) &&
+          pagedir_get_page(thread_current()->pcb->pagedir, pg_round_down(uaddr)) != NULL);
+}
+
+bool is_valid_user_range(const void* uaddr, size_t range) {
+  if (range < 0)
+    return false;
+  if (range == 0)
+    return true;
+
+  uintptr_t a = (uintptr_t)uaddr;
+  uintptr_t b = a + (uintptr_t)range - 1;
+
+  if (a > b)
+    return false;
+
+  for (size_t i = 0; i < range; i++) {
+    uintptr_t a = (uintptr_t)uaddr + (uintptr_t)i;
+    if (!is_valid_user_ptr((const void*)a))
+      return false;
   }
 
-  // File Operations
-  if (args[0] == SYS_CREATE) {
-  }
-
-  if (args[0] == SYS_REMOVE) {
-  }
-
-  if (args[0] == SYS_OPEN) {
-  }
-
-  if (args[0] == SYS_FILESIZE) {
-  }
-
-  if (args[0] == SYS_READ) {
-  }
-
-  if (args[0] == SYS_WRITE) {
-    write(args[1], args[2], args[3]);
-  }
-
-  if (args[0] == SYS_SEEK) {
-  }
-
-  if (args[0] == SYS_TELL) {
-  }
-
-  if (args[0] == SYS_CLOSE) {
-  }
-
-  if (args[0] == SYS_EXIT) {
-    f->eax = args[1];
-    thread_current()->exit_status = args[1];
-    // printf("%s: exit(%d)\n", thread_current()->pcb->process_name, args[1]);
-    process_exit();
-  }
+  return true;
 }
 
 /**
  * Syscall Signatures
  */
-int practice(int i) {}
+void halt(void) { shutdown(); }
 
-void halt(void) {}
+void sys_exit(struct intr_frame* f) {
+  uint32_t* args = ((uint32_t*)f->esp);
+  f->eax = args[1];
+  thread_current()->exit_status = args[1];
+  // printf("%s: exit(%d)\n", thread_current()->pcb->process_name, args[1]);
+  process_exit();
+}
 
-void exit(int status) {}
+pid_t exec(const char* cmd_line) {
+  char* kpage = malloc(strlen(cmd_line) + 1);
+  if (kpage == NULL)
+    return -1;
 
-pid_t exec(const char* cmd_line) {}
+  strlcpy(kpage, cmd_line, strlen(cmd_line) + 1);
+  pid_t tid = process_execute(kpage);
+  if (tid == TID_ERROR) {
+    printf("entered\n");
+    free(kpage);
+    return -1;
+  }
+  free(kpage);
 
-int wait(pid_t pid) {}
+  printf("finished");
+  return tid;
+}
 
-pid_t fork(void) {}
+int wait(pid_t pid) {
+  return process_wait(pid);
+  // return 0;
+}
+
+pid_t fork(struct intr_frame* f) { return process_fork(f); }
 
 /**
  * File operations
  */
-bool create(const char* file, unsigned initial_size) {}
-
-bool remove(const char* file) {}
-
-int open(const char* file) {}
-
-int filesize(int fd) {}
-
-int read(int fd, void* buffer, unsigned size) {}
-
-void seek(int fd, unsigned position) {}
-
-int tell(int fd) {}
-
-void close(int fd) {}
-
-int write(int fd, const void* buffer, unsigned size) {
-  if (fd == 1) {
-    if (size < MAX_BUFFER_SIZE) {
-      putbuf(buffer, size);
-    } else {
-      // break into a few hunderd byte chunks
-      lock_acquire(&console_lock);
-      while (size > 0) {
-        size_t cur_size = size < MAX_BUFFER_SIZE ? size : MAX_BUFFER_SIZE;
-        putbuf(buffer, cur_size);
-        size -= cur_size;
-      }
-      lock_release(&console_lock);
-    }
-    return 0;
+bool create(const char* file, unsigned initial_size) {
+  // printf("current file: %s\n", file);
+  // printf("current size: %u\n", initial_size);
+  if (!file || file[0] == '\0') {
+    return false;
   }
-  /* write from fd */
+  lock_acquire(&filesys_lock);
+  bool res = filesys_create(file, initial_size);
+  lock_release(&filesys_lock);
+
+  return res;
+}
+
+bool remove(const char* file) {
+  if (file == NULL) {
+    return false; // 无效参数
+  }
+
+  lock_acquire(&filesys_lock);
+  bool success = filesys_remove(file);
+  lock_release(&filesys_lock);
+
+  return success;
+}
+
+int open(const char* file) {
+  /* get current's process's fdtable */
   fdtable* fdt = cur_fdt();
   ASSERT(fdt != NULL);
 
-  /* find file */
-  struct file* f = get_file(fd, fdt);
+  // open file* from file_name
+  lock_acquire(&filesys_lock);
+  struct file* f = filesys_open(file);
+  lock_release(&filesys_lock);
+
+  // save &file into fdtable
+  int fd = -1;
+  lock_acquire(&fdt->lock);
+  fd = add_file_unlocked(f, fdt);
+  lock_release(&fdt->lock);
+
+  return fd;
+}
+
+int read(int fd, void* buffer, unsigned size) {
+  ASSERT(buffer != NULL);
+  uint8_t* input_buffer = (uint8_t*)buffer;
+
+  if (fd == 1)
+    return -1;
+  if (fd == 0) {
+    unsigned i = 0;
+    for (; i < size; i++) {
+      uint8_t ch = input_getc();
+      input_buffer[i] = ch;
+    }
+    return (int)i;
+  }
+
+  fdtable* fdt = cur_fdt();
+  struct file* f = NULL;
+
+  // A 阶段：只访问 fdt
+  lock_acquire(&fdt->lock);
+  f = get_file_unlocked(fd, fdt);
+  lock_release(&fdt->lock);
   if (!f)
     return -1;
 
-  size_t off = 0;
-  while (off < size) {
-    size_t r = file_write(f, (char*)buffer + off, size - off);
-    if (r > 0) {
-      off += (size_t)r;
-      continue;
-    }
-    if (r == 0)
-      break; // EOF
-    if (off == (size_t)file_length(f))
-      break; // write to the end of written file
+  // B 阶段：只做文件系统调用
+  lock_acquire(&filesys_lock);
+  int n = file_read(f, buffer, size);
+  lock_release(&filesys_lock);
+  return n;
+}
+int filesize(int fd) {
+  fdtable* fdt = cur_fdt();
+  struct file* f = NULL;
+  lock_acquire(&fdt->lock);
+  f = get_file_unlocked(fd, fdt);
+  lock_release(&fdt->lock);
+  if (!f)
     return -1;
+
+  lock_acquire(&filesys_lock);
+  int len = file_length(f);
+  lock_release(&filesys_lock);
+  return len;
+}
+
+void seek(int fd, unsigned pos) {
+  fdtable* fdt = cur_fdt();
+  struct file* f = NULL;
+  lock_acquire(&fdt->lock);
+  f = get_file_unlocked(fd, fdt);
+  lock_release(&fdt->lock);
+  if (!f)
+    return;
+
+  lock_acquire(&filesys_lock);
+  file_seek(f, pos);
+  lock_release(&filesys_lock);
+}
+
+int tell(int fd) {
+  fdtable* fdt = cur_fdt();
+  struct file* f = NULL;
+  lock_acquire(&fdt->lock);
+  f = get_file_unlocked(fd, fdt);
+  lock_release(&fdt->lock);
+  if (!f)
+    return -1;
+
+  lock_acquire(&filesys_lock);
+  int res = file_tell(f);
+  lock_release(&filesys_lock);
+  return res;
+}
+
+void close(int fd) {
+  fdtable* fdt = cur_fdt();
+  if (!fdt) {
+    return;
   }
-  if (off == 0) { // nothing to write
-    return 0;
+
+  // printf("reached1\n");
+  struct thread* cur = thread_current();
+  // printf("CLOSE ENTRY pid=%d pcb=%p fdtable=%p files[2]=%p\n",
+  // cur->tid,
+  // cur->pcb,
+  // cur->pcb->fdtable,
+  // cur->pcb->fdtable->files[2]);
+
+  lock_acquire(&fdt->lock);
+  // printf("reached2\n");
+
+  if (fd < 0 || fd >= fdt->size || !bitmap_test(fdt->bitmap, fd)) {
+    lock_release(&fdt->lock);
+    return;
   }
-  return (size_t)off;
+
+  // printf("reached3\n");
+  struct file* f = fdt->files[fd];
+  fdt->files[fd] = NULL;
+  bitmap_set(fdt->bitmap, fd, false);
+  // printf("reached4\n");
+
+  lock_release(&fdt->lock);
+
+  if (f == NULL) {
+    // printf("return NULL\n");
+
+    return;
+  }
+
+  lock_acquire(&filesys_lock);
+  file_close(f);
+  // printf("reached5\n");
+  lock_release(&filesys_lock);
+}
+
+int write(int fd, const void* buffer, unsigned size) {
+  if (fd == 0)
+    return -1;
+  if (fd == 1) {
+    const uint8_t* p = (const uint8_t*)buffer;
+    unsigned remain = size;
+    while (remain > 0) {
+      size_t chunk = remain < MAX_BUFFER_SIZE ? remain : MAX_BUFFER_SIZE;
+      putbuf((const char*)p, chunk);
+      p += chunk;
+      remain -= chunk;
+    }
+    return (int)size;
+  }
+  fdtable* fdt = cur_fdt();
+  struct file* f = NULL;
+
+  lock_acquire(&fdt->lock);
+  f = get_file_unlocked(fd, fdt);
+  lock_release(&fdt->lock);
+  if (!f)
+    return -1;
+
+  lock_acquire(&filesys_lock);
+  int n = file_write(f, buffer, size);
+  lock_release(&filesys_lock);
+  return n;
 }

@@ -3,7 +3,10 @@
 
 #include <stdlib.h>
 #include "userprog/process.h"
+#include "threads/interrupt.h"
 #include "userprog/fdtable.h"
+#include "threads/vaddr.h"
+#include <limits.h>
 
 void syscall_init(void);
 
@@ -14,13 +17,13 @@ int practice(int i);
 
 void halt(void);
 
-void exit(int status);
+void sys_exit(struct intr_frame* f);
 
 pid_t exec(const char* cmd_line);
 
 int wait(pid_t pid);
 
-pid_t fork(void);
+pid_t fork(struct intr_frame* f);
 
 /**
  * File operations
@@ -33,7 +36,7 @@ int open(const char* file);
 
 int filesize(int fd);
 
-int read(int fd, void* buffer, unsigned size);
+int sys_read(int fd, void* buffer, unsigned size);
 
 void seek(int fd, unsigned position);
 
