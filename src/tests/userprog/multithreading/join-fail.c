@@ -36,7 +36,7 @@ void joiner_function(void* arg_) {
   if (jtd->should_succeed)
     pthread_check_join(jtd->tid);
   else if (pthread_join(jtd->tid))
-    fail("Should have failed.");
+    fail("Should have failed1.");
   msg("Finished joining");
 }
 
@@ -45,11 +45,12 @@ void self_joiner_function(void* arg_) {
   struct self_joiner_thread_data* sjtd = (struct self_joiner_thread_data*)arg_;
   sema_down(&sjtd->populate_sjtd); // Wait until tells us our TID
   if (pthread_join(sjtd->self_tid))
-    fail("Should have failed.");
+    fail("Should have failed2.");
   msg("Finished self joining");
 }
 
 void test_main(void) {
+
   syn_msg = true;
   msg("Main starting");
 

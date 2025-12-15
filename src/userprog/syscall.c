@@ -20,12 +20,10 @@ bool is_valid_user_range(const void* uaddr, size_t range);
 
 static size_t MAX_BUFFER_SIZE = 1024;
 static struct lock console_lock;
-static struct lock filesys_lock;
 
 void syscall_init(void) {
   intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall");
   lock_init(&console_lock);
-  lock_init(&filesys_lock);
 }
 
 static inline fdtable* cur_fdt(void) {
@@ -36,6 +34,7 @@ static inline fdtable* cur_fdt(void) {
 
 static void copy_in(void* dest, const void* source, size_t size) {
   if (!is_valid_user_range(source, size)) {
+    thread_current()->exit_status = -1;
     process_exit();
   }
   memcpy(dest, source, size);
@@ -43,6 +42,7 @@ static void copy_in(void* dest, const void* source, size_t size) {
 
 static bool is_valid_str(const void* ptr) {
   const char* str = ptr;
+
   size_t i = 0;
 
   while (true) {
@@ -65,8 +65,13 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
   // printf("syscall num = %u\n", num);
 
   if (!is_valid_user_range(args, sizeof(uint32_t))) {
+    thread_current()->exit_status = -1;
     process_exit();
     return;
+  }
+
+  if (thread_current()->exited) {
+    thread_exit();
   }
 
   /*
@@ -83,9 +88,11 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     case SYS_CREATE: {
       // printf("entered create\n");
       if (!is_valid_str(args[1])) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       if (!is_valid_user_range(args + 1 * 2, sizeof(unsigned))) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       const char* file = (const char*)(args[1]);
@@ -94,20 +101,25 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     }
     case SYS_REMOVE: {
-      if (!is_valid_str(args[1]))
+      if (!is_valid_str(args[1])) {
+        thread_current()->exit_status = -1;
         process_exit();
+      }
+
       const char* file = (const char*)args[1];
-      f->eax = remove(file); // 调用封装好的安全接口
+      f->eax = remove(file);
       break;
     }
     case SYS_OPEN: {
       if (!is_valid_str(args[1])) {
         // printf("open invalid and exited\n");
+        thread_current()->exit_status = -1;
         process_exit();
       }
       const char* file = (const char*)(args[1]);
       if (!file || !is_valid_user_ptr(file)) {
         // printf("open invalid ptr\n");
+        thread_current()->exit_status = -1;
         process_exit();
       }
       f->eax = open(file);
@@ -117,6 +129,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     }
     case SYS_FILESIZE: {
       if (!is_valid_user_range(args, 2 * sizeof(int))) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       const int fd = (int)(args[1]);
@@ -128,15 +141,18 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     }
     case SYS_READ: {
       if (!is_valid_user_range(args, 4 * sizeof(int))) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       const int fd = (int)(args[1]);
       void* buffer = args[2];
       unsigned initial_size = (unsigned)(args[3]);
       if (fd < 0 || fd > INT_MAX) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       if (!is_valid_user_range(buffer, initial_size)) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       // printf("filename: %d\n", fd);
@@ -145,15 +161,18 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     }
     case SYS_WRITE: {
       if (!is_valid_user_range(args, 4 * sizeof(int))) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       const int fd = (int)(args[1]);
       void* buffer = args[2];
       unsigned initial_size = (unsigned)(args[3]);
       if (fd < 0 || fd > INT_MAX) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       if (!is_valid_user_range(buffer, initial_size)) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       f->eax = write(fd, buffer, initial_size);
@@ -162,11 +181,13 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     }
     case SYS_SEEK: {
       if (!is_valid_user_range(args, 3 * sizeof(int))) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       const int fd = (int)(args[1]);
       unsigned position = (unsigned)(args[2]);
       if (fd < 0 || fd > INT_MAX) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       seek(fd, position);
@@ -174,10 +195,12 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     }
     case SYS_TELL: {
       if (!is_valid_user_range(args, 2 * sizeof(int))) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       const int fd = (int)(args[1]);
       if (fd < 0 || fd > INT_MAX) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       f->eax = tell(fd);
@@ -187,11 +210,13 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       // printf("entered closed\n");
       if (!is_valid_user_range(args, 2 * sizeof(int))) {
         // printf("exited\n");
+        thread_current()->exit_status = -1;
         process_exit();
       }
       const int fd = (int)(args[1]);
       if (fd < 0 || fd > INT_MAX) {
         // printf("invalid with id=%d\n", fd);
+        thread_current()->exit_status = -1;
         process_exit();
       }
       // printf("close fd = %d\n", fd);
@@ -202,6 +227,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     // Process Control Operations
     case SYS_PRACTICE: {
       if (!is_valid_user_range(args, 2 * sizeof(int))) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       const int input = (int)(args[1]);
@@ -215,7 +241,12 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       sys_exit(f);
       break;
     case SYS_EXEC: {
+      if (!is_valid_user_ptr(args + 4)) {
+        thread_current()->exit_status = -1;
+        process_exit();
+      }
       if (!is_valid_str(args[1])) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       const char* file = (const char*)(args[1]);
@@ -224,6 +255,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     }
     case SYS_WAIT: {
       if (!is_valid_user_range(args, 2 * sizeof(int))) {
+        thread_current()->exit_status = -1;
         process_exit();
       }
       const int pid = (int)(args[1]);
@@ -234,8 +266,95 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       f->eax = fork(f);
       break;
     }
+
+    /* Pthread Opeartions*/
+    case SYS_PT_CREATE: {
+      if (!is_valid_user_range(args, 4 * sizeof(int))) {
+        thread_current()->exit_status = -1;
+        process_exit();
+      }
+      stub_fun sfun = (stub_fun)(args[1]);
+      pthread_fun pfun = (pthread_fun)(args[2]);
+      void* arg = (void*)(args[3]);
+
+      f->eax = sys_pthread_create(sfun, pfun, arg);
+      break;
+    }
+    case SYS_PT_EXIT: {
+      sys_pthread_exit();
+      break;
+    }
+    case SYS_PT_JOIN: {
+      if (!is_valid_user_range(args, 2 * sizeof(int))) {
+        thread_current()->exit_status = -1;
+        process_exit();
+      }
+      const int tid = (int)(args[1]);
+      f->eax = sys_pthread_join(tid);
+      break;
+    }
+    case SYS_LOCK_INIT: {
+      if (!is_valid_user_range(args, 2 * sizeof(void*))) {
+        thread_current()->exit_status = -1;
+        process_exit();
+      }
+      char* lock = (char*)args[1];
+      f->eax = sys_lock_init(lock);
+      break;
+    }
+    case SYS_LOCK_ACQUIRE: {
+      if (!is_valid_user_range(args, 2 * sizeof(void*))) {
+        thread_current()->exit_status = -1;
+        process_exit();
+      }
+      char* lock = (char*)args[1];
+      f->eax = sys_lock_acquire(lock);
+      break;
+    }
+    case SYS_LOCK_RELEASE: {
+      if (!is_valid_user_range(args, 2 * sizeof(void*))) {
+        thread_current()->exit_status = -1;
+        process_exit();
+      }
+      char* lock = (char*)args[1];
+      f->eax = sys_lock_release(lock);
+      break;
+    }
+    case SYS_SEMA_INIT: {
+      if (!is_valid_user_range(args, 3 * sizeof(void*))) {
+        thread_current()->exit_status = -1;
+        process_exit();
+      }
+      char* sema = (char*)args[1];
+      int val = (int)args[2];
+      f->eax = sys_sema_init(sema, val);
+      break;
+    }
+    case SYS_SEMA_DOWN: {
+      if (!is_valid_user_range(args, 2 * sizeof(void*))) {
+        thread_current()->exit_status = -1;
+        process_exit();
+      }
+      char* sema = (char*)args[1];
+      f->eax = sys_sema_down(sema);
+      break;
+    }
+    case SYS_SEMA_UP: {
+      if (!is_valid_user_range(args, 2 * sizeof(void*))) {
+        thread_current()->exit_status = -1;
+        process_exit();
+      }
+      char* sema = (char*)args[1];
+      f->eax = sys_sema_up(sema);
+      break;
+    }
+    case SYS_GET_TID: {
+      f->eax = get_tid();
+      break;
+    }
+
     default:
-      printf("Unknown Syscall: %d\n", args[0]);
+      // printf("Unknown Syscall: %d\n", args[0]);
       break;
   }
 }
@@ -273,10 +392,17 @@ void halt(void) { shutdown(); }
 
 void sys_exit(struct intr_frame* f) {
   uint32_t* args = ((uint32_t*)f->esp);
-  f->eax = args[1];
-  thread_current()->exit_status = args[1];
+  // printf("SYS_EXIT: tid=%d, status=%d\n", thread_current()->tid, args[1]);
+  // f->eax = args[1];
+  // thread_current()->exit_status = args[1];
   // printf("%s: exit(%d)\n", thread_current()->pcb->process_name, args[1]);
+  /* Pass exit_status to main thread */
+  struct process* pcb = thread_current()->pcb;
+  pcb->main_thread->exit_status = args[1];
+  thread_current()->exit_status = args[1];
+  /* End all child threads*/
   process_exit();
+  // process_exit();
 }
 
 pid_t exec(const char* cmd_line) {
@@ -287,13 +413,11 @@ pid_t exec(const char* cmd_line) {
   strlcpy(kpage, cmd_line, strlen(cmd_line) + 1);
   pid_t tid = process_execute(kpage);
   if (tid == TID_ERROR) {
-    printf("entered\n");
     free(kpage);
     return -1;
   }
   free(kpage);
 
-  printf("finished");
   return tid;
 }
 
@@ -310,6 +434,7 @@ pid_t fork(struct intr_frame* f) { return process_fork(f); }
 bool create(const char* file, unsigned initial_size) {
   // printf("current file: %s\n", file);
   // printf("current size: %u\n", initial_size);
+
   if (!file || file[0] == '\0') {
     return false;
   }
@@ -347,6 +472,13 @@ int open(const char* file) {
   lock_acquire(&fdt->lock);
   fd = add_file_unlocked(f, fdt);
   lock_release(&fdt->lock);
+
+  // printf("fd: %d\n", fd);
+
+  if (fd < 0) { // not enough fds in table
+    filesys_remove(file);
+    return -1;
+  }
 
   return fd;
 }
@@ -496,3 +628,47 @@ int write(int fd, const void* buffer, unsigned size) {
   lock_release(&filesys_lock);
   return n;
 }
+
+/* Pthread Operations */
+tid_t sys_pthread_create(stub_fun sfun, pthread_fun tfun, const void* arg) {
+  // printf("pthread_create: parent=%d\n", thread_current()->tid);
+
+  return pthread_execute(sfun, tfun, arg);
+}
+
+void sys_pthread_exit(void) {
+  // printf("pthread_exit: tid=%d\n", thread_current()->tid);
+  pthread_exit();
+}
+
+tid_t sys_pthread_join(tid_t tid) {
+  // printf("pthread_join: waiter=%d waits_for=%d\n", thread_current()->tid, tid);
+
+  return pthread_join(tid);
+}
+
+bool sys_lock_init(char* lock) {
+  if (!lock) {
+    return false;
+  }
+  create_new_lock(lock);
+  return true;
+}
+
+bool sys_lock_acquire(char* lock) { return acquire_tlock(lock); }
+
+bool sys_lock_release(char* lock) { return release_tlock(lock); }
+
+bool sys_sema_init(char* sema, int val) {
+  if (!sema || val < 0) {
+    return false;
+  }
+  create_new_sema(sema, val);
+  return true;
+}
+
+bool sys_sema_down(char* sema) { return sema_down_t(sema); }
+
+bool sys_sema_up(char* sema) { return sema_up_t(sema); }
+
+tid_t get_tid(void) { return thread_current()->tid; }

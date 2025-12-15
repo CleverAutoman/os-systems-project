@@ -23,6 +23,7 @@ void thread_function(void* arg_) {
 }
 
 void test_main(void) {
+
   lock_check_init(&lock);
 
   // Initialize data. Lock acquire here isn't necessary, but oh well.
@@ -32,18 +33,19 @@ void test_main(void) {
 
   // Spawn threads
   tid_t tids[NUM_THREADS];
-  for (int i = 0; i < NUM_THREADS; i++)
+  for (int i = 0; i < NUM_THREADS; i++) {
     tids[i] = pthread_check_create(thread_function, &best_class);
+  }
 
   // Wait on threads
-  for (int i = 0; i < NUM_THREADS; i++)
+  for (int i = 0; i < NUM_THREADS; i++) {
     pthread_check_join(tids[i]);
+  }
 
   // Check that the value is correct
   lock_acquire(&lock);
   int final = best_class;
   lock_release(&lock);
-
   if (final != 162)
     fail("The best class is 162, but you thought it was %d", final);
   msg("PASS");

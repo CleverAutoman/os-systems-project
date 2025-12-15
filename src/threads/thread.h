@@ -7,6 +7,10 @@
 #include "threads/synch.h"
 #include "threads/fixed-point.h"
 
+struct semaphore;
+
+#define MAX(a, b) ((a) > (b) ? (a) : (b)) // get max int
+
 /* States in a thread's life cycle. */
 enum thread_status {
   THREAD_RUNNING, /* Running thread. */
@@ -21,9 +25,13 @@ typedef int tid_t;
 #define TID_ERROR ((tid_t)-1) /* Error value for tid_t. */
 
 /* Thread priorities. */
-#define PRI_MIN 0      /* Lowest priority. */
-#define PRI_DEFAULT 31 /* Default priority. */
-#define PRI_MAX 63     /* Highest priority. */
+#define PRI_MIN 0               /* Lowest priority. */
+#define PRI_DEFAULT 31          /* Default priority. */
+#define PRI_MAX 63              /* Highest priority. */
+#define PRI_BOUND (PRI_MAX + 1) /* Highest priority. */
+
+struct lock;
+struct thread_end_status;
 
 /* A kernel thread or user process.
 
@@ -87,7 +95,6 @@ struct thread {
   enum thread_status status; /* Thread state. */
   char name[16];             /* Name (for debugging purposes). */
   uint8_t* stack;            /* Saved stack pointer. */
-  int priority;              /* Priority. */
   struct list_elem allelem;  /* List element for all threads list. */
 
   /* Shared between thread.c and synch.c. */
@@ -101,6 +108,27 @@ struct thread {
   /* Owned by thread.c. */
   unsigned magic; /* Detects stack overflow. */
   int exit_status;
+
+  /* For efficient alarm */
+  struct list_elem sleep_elem;
+  int64_t wakeup_tick;
+
+  /* Schedule */
+  /* Priority */
+  struct list_elem bucket_elem; /* Thread that share same priority */
+  int priority;                 /* Priority. */
+  int donated_priority;         /* Donated Priority: t->donated_priority */
+  struct lock* requesting_lock; /* Requesting lock but not obtained yet */
+  struct list
+      holding_locks; /* The locks that cur thread is holding, update its dnt_priority when releasing locks  */
+
+  /* Multi-threading: for user_threads */
+  struct list_elem user_elem; // -> pcb->user_threads
+  void* user_stack_page;
+  size_t user_page_count; // TODO: NEED to fix stack page array
+
+  bool exited;
+  struct thread_end_status* tes;
 };
 
 /* Types of scheduler that the user can request the kernel
@@ -136,6 +164,8 @@ tid_t thread_tid(void);
 const char* thread_name(void);
 
 void thread_exit(void) NO_RETURN;
+void end_user_thread(struct thread* t);
+void add_current_thread_to_process(tid_t tid);
 void thread_yield(void);
 
 /* Performs some operation on thread t, given auxiliary data AUX. */
@@ -144,10 +174,29 @@ void thread_foreach(thread_action_func*, void*);
 
 int thread_get_priority(void);
 void thread_set_priority(int);
+int get_highest_priority(void);
+void thread_set_donated_priority(struct thread* t, int prev_priority, int new_priority);
 
 int thread_get_nice(void);
 void thread_set_nice(int);
 int thread_get_recent_cpu(void);
 int thread_get_load_avg(void);
+
+/* Used to transfer data between joiner and joinee 
+    Store thread in process user_threads list */
+struct thread_end_status {
+  tid_t tid; // will be joinee
+  int exit_status;
+  bool is_waited; // is waiting by some thread else
+  bool exited;
+  struct list_elem user_elem; // -> pcb->user_threads
+  struct lock status_lock;
+  struct semaphore join_sema;
+  struct thread* thread; // this thread* , used to set exited of thread
+  uint32_t gen;
+  uint32_t magic;
+};
+
+void create_thread_end_status(struct thread_end_status* ti, tid_t tid);
 
 #endif /* threads/thread.h */

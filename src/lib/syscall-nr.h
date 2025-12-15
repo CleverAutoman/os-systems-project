@@ -4,20 +4,22 @@
 /* System call numbers. */
 enum {
   /* Projects 1 and later. */
-  SYS_HALT,         /* Halt the operating system. */
-  SYS_EXIT,         /* Terminate this process. */
-  SYS_EXEC,         /* Start another process. */
-  SYS_WAIT,         /* Wait for a child process to die. */
-  SYS_CREATE,       /* Create a file. */
-  SYS_REMOVE,       /* Delete a file. */
-  SYS_OPEN,         /* Open a file. */
-  SYS_FILESIZE,     /* Obtain a file's size. */
-  SYS_READ,         /* Read from a file. */
-  SYS_WRITE,        /* Write to a file. */
-  SYS_SEEK,         /* Change position in a file. */
-  SYS_TELL,         /* Report current position in a file. */
-  SYS_CLOSE,        /* Close a file. */
-  SYS_PRACTICE,     /* Returns arg incremented by 1 */
+  SYS_HALT,     /* Halt the operating system. */
+  SYS_EXIT,     /* Terminate this process. */
+  SYS_EXEC,     /* Start another process. */
+  SYS_WAIT,     /* Wait for a child process to die. */
+  SYS_CREATE,   /* Create a file. */
+  SYS_REMOVE,   /* Delete a file. */
+  SYS_OPEN,     /* Open a file. */
+  SYS_FILESIZE, /* Obtain a file's size. */
+  SYS_READ,     /* Read from a file. */
+  SYS_WRITE,    /* Write to a file. */
+  SYS_SEEK,     /* Change position in a file. */
+  SYS_TELL,     /* Report current position in a file. */
+  SYS_CLOSE,    /* Close a file. */
+  SYS_PRACTICE, /* Returns arg incremented by 1 */
+  SYS_FORK,     /* Creates a copy of the process */
+
   SYS_PT_CREATE,    /* Creates a new thread */
   SYS_PT_EXIT,      /* Exits the current thread */
   SYS_PT_JOIN,      /* Waits for thread to finish */
@@ -28,7 +30,6 @@ enum {
   SYS_SEMA_DOWN,    /* Downs a semaphore */
   SYS_SEMA_UP,      /* Ups a semaphore */
   SYS_GET_TID,      /* Gets TID of the current thread */
-  SYS_FORK,         /* Creates a copy of the process */
 
   /* Project 3 and optionally project 4. */
   SYS_MMAP,   /* Map a file into memory. */

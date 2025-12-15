@@ -21,6 +21,7 @@ void thread_function(void* arg_);
 /* Each thread downs thread_sema, grabs the global lock, increments
    ready_threads and wakes main safely */
 void thread_function(void* arg_ UNUSED) {
+  // msg("entered thread");
   sema_down(&thread_sema);
   lock_acquire(&global_lock);
   msg("%d threads are now ready", ++ready_threads);
@@ -36,7 +37,9 @@ void test_main(void) {
   // Initialize global data
   lock_check_init(&global_lock);
   sema_check_init(&main_sema, 0);
+
   sema_check_init(&thread_sema, NUM_THREADS);
+
   ready_threads = 0;
 
   // Spawn threads

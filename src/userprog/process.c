@@ -22,18 +22,23 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/fdtable.h"
+#include "userprog/sync_table.h"
 
-static struct semaphore temporary;
 static thread_func start_process NO_RETURN;
-static thread_func start_pthread NO_RETURN;
+// static thread_func start_pthread NO_RETURN;
 static bool load(const char* file_name, void (**eip)(void), void** esp);
-bool setup_thread(void (**eip)(void), void** esp);
+bool setup_thread(void (**eip)(void), void** esp, struct pthread_aux* pa);
 static size_t file_name_length(const char* file_name);
 static char** split_file_name(const char* file_name, size_t ct);
+static size_t get_next_free_index();
 
 /* load helpers */
 static bool install_page(void* upage, void* kpage, bool writable);
 
+/* Filesys lock */
+struct lock filesys_lock;
+
+/* To pass into child process */
 struct execute_aux {
   struct child_proc* parent_proc;
   char* file_name;
@@ -56,8 +61,23 @@ void userprog_init(void) {
   success = t->pcb != NULL;
 
   /* initiliaze children lists */
-  ASSERT(&t->pcb->children != NULL);
   list_init(&t->pcb->children);
+  list_init(&t->pcb->user_threads);
+
+  lock_init(&t->pcb->free_page_lock);
+  lock_init(&t->pcb->child_global_lock);
+
+  /* Initialize Process exit semaphore */
+  sema_init(&t->pcb->process_exit_sema, 0);
+
+  /* Create thread_end_status and Add current thtread to parent process */
+  add_current_thread_to_process(t->tid);
+
+  /* Initialize thread's free page size */
+  t->pcb->next_free_page = 1;
+
+  /* Initialize filesys lock */
+  lock_init(&filesys_lock);
 
   /* Kill the kernel if we did not succeed */
   ASSERT(success);
@@ -72,7 +92,6 @@ pid_t process_execute(const char* file_name) {
   char* fn_copy;
   tid_t tid;
 
-  sema_init(&temporary, 0);
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page(0);
@@ -96,7 +115,10 @@ pid_t process_execute(const char* file_name) {
   /* 2. initialize child_proc for children processes  */
   struct child_proc* cp = calloc(sizeof(struct child_proc), 1);
   create_child_proc(cp);
-  cp->refcnt += 1;
+  // printf("NEW CP: parent_tid=%d cp=%p wait_sema=%p\n",
+  //      thread_current()->tid, cp, &cp->wait_sema);
+
+  cp->parent_process = process_current();
 
   struct execute_aux* e_aux = calloc(sizeof(struct execute_aux), 1);
   e_aux->file_name = fn_copy;
@@ -104,35 +126,33 @@ pid_t process_execute(const char* file_name) {
 
   /* 3. Create a new thread to execute FILE_NAME. */
   tid = thread_create(file_name_, PRI_DEFAULT, start_process, e_aux);
+  if (tid == TID_ERROR) {
+    palloc_free_page(fn_copy);
+    free(file_name_);
+    free(cp);
+    free(e_aux);
+    return -1;
+  }
+  cp->tid = tid;
+  // printf("SET CP TID: cp=%p tid=%d\n", cp, tid);
   sema_down(&cp->load_sema);
   if (!cp->load_ok) {
     // printf("load failed\n");
-    sema_up(&cp->wait_sema);
+    free(file_name_);
+    free(e_aux);
+    free(cp);
     return -1;
   }
 
   /* 4. Push child_proc into cur_proc's children list. */
-  cp->tid = tid;
   list_push_front(&process_current()->children, &cp->elem);
-  struct process* p = process_current();
   // printf("EXEC parent pcb=%p children=%p pushed cp=%p elem=%p tid=%d\n",
   //      p, &p->children, cp, &cp->elem, tid);
 
-  struct list_elem* e;
-  for (e = list_begin(&process_current()->children); e != list_end(&process_current()->children);
-       e = list_next(e)) {
-    struct child_proc* c_proc = list_entry(e, struct child_proc, elem);
-  }
-
   /* 5. reach parent process end && refct -= 1 && free */
-  if (tid == TID_ERROR)
-    palloc_free_page(fn_copy);
-
   free(file_name_);
-  cp->refcnt -= 1;
-  if (cp->refcnt == 0) {
-    free(cp);
-  }
+  free(e_aux);
+
   return tid;
 }
 
@@ -144,11 +164,9 @@ static void start_process(void* aux) {
   // char* file_name = palloc_get_page(0);
   // strlcpy(file_name, e_aux->file_name, strlen(e_aux->file_name) + 1);
   char* file_name = e_aux->file_name;
-  printf("aux before: %p\n", file_name);
+  // printf("aux before: %p\n", file_name);
 
   struct child_proc* cp = e_aux->parent_proc;
-  cp->refcnt += 1;
-  // free(e_aux);
 
   struct thread* t = thread_current();
   struct intr_frame if_;
@@ -167,22 +185,45 @@ static void start_process(void* aux) {
 
     // Continue initializing the PCB as normal
     t->pcb->main_thread = t;
-    strlcpy(t->pcb->process_name, file_name, strlen(file_name) + 1);
+    strlcpy(t->pcb->process_name, t->name, sizeof(t->pcb->process_name));
 
     /* initialize fdtable */
-    t->pcb->fdtable = malloc(sizeof(struct fdtable));
+    t->pcb->fdtable = calloc(sizeof(struct fdtable), 1);
     fdtable_create(t->pcb->fdtable, 512);
     ASSERT(t->pcb->fdtable != NULL);
 
-    /* initiliaze other propertiese */
+    /* Initiliaze other propertiese */
     list_init(&t->pcb->children);
     ASSERT(&t->pcb->children != NULL);
 
+    /* User threads */
+    list_init(&t->pcb->user_threads);
+    lock_init(&t->pcb->free_page_lock);
+    lock_init(&t->pcb->child_global_lock);
+    sema_init(&t->pcb->process_exit_sema, 0); // for process exit
+
+    /* Initialize user sync table  */
+    t->pcb->sync_table = calloc(sizeof(struct sync_table), 1);
+
+    /* Create thread_end_status and Add current thtread to parent process */
+    add_current_thread_to_process(thread_current()->tid);
+
+    if (!t->pcb->sync_table) {
+      // free_table(t->pcb->fdtable);
+      palloc_free_page(e_aux->file_name);
+      cp->load_ok = false;
+      sema_up(&cp->load_sema);
+      thread_current()->exit_status = -1;
+      process_exit();
+    }
+    initialize_sync_table(t->pcb->sync_table);
+
+    t->pcb->next_free_page = 1;
     /* allocate parent */
     t->pcb->parent_proc = cp;
   }
 
-  /* argument passing */
+  /* argument parsing */
   /* 1. split file_name and args if_.esp == 3222319104 */
 
   size_t ct = file_name_length(file_name);
@@ -196,8 +237,8 @@ static void start_process(void* aux) {
     if_.eflags = FLAG_IF | FLAG_MBS;
     success = load(str_lst[0], &if_.eip, &if_.esp);
     if (!success) {
-      printf("failed\n");
-
+      // printf("failed\n");
+      palloc_free_page(e_aux->file_name);
       if (str_lst != NULL) {
         for (int i = 0; str_lst[i] != NULL; i++)
           free(str_lst[i]);
@@ -205,24 +246,23 @@ static void start_process(void* aux) {
       }
       cp->load_ok = false;
       sema_up(&cp->load_sema);
+      thread_current()->exit_status = -1;
       process_exit();
     }
     // success = load(file_name, &if_.eip, &if_.esp);
   }
-  printf("reached2\n");
 
   /* Handle failure with succesful PCB malloc. Must free the PCB */
-  if (!success && pcb_success) {
+  if (!success || !pcb_success) {
     // Avoid race where PCB is freed before t->pcb is set to NULL
     // If this happens, then an unfortuantely timed timer interrupt
     // can try to activate the pagedir, but it is now freed memory
-
+    // palloc_free_page(file_name);
     struct process* pcb_to_free = t->pcb;
+    palloc_free_page(e_aux->file_name);
     t->pcb = NULL;
     free(pcb_to_free);
   }
-
-  sema_up(&cp->load_sema);
 
   /* 2. write data into stack esp == 3221225472 */
   // move stack ptr
@@ -277,27 +317,16 @@ static void start_process(void* aux) {
   if_.esp -= sizeof(void*);
   *(void**)if_.esp = 0;
 
-  // if_.esp -= sizeof(void*);
-
-  /* Clean up. Exit on failure or jump to userspace */
-  // printf("start_thread success with name = %s\n", file_name);
-  // palloc_free_page(file_name);
-
-  // // clean child_process
-  // cp->refcnt -= 1;
-  // if (cp->refcnt == 0) {
-  //   free(cp);
-  // }
   if (!success) {
-    sema_up(&temporary);
-
     if (str_lst != NULL) {
       for (int i = 0; str_lst[i] != NULL; i++)
         free(str_lst[i]);
       free(str_lst);
     }
     palloc_free_page(e_aux->file_name);
-    thread_exit();
+    cp->load_ok = false;
+    sema_up(&cp->load_sema);
+    process_exit();
   }
 
   if (str_lst != NULL) {
@@ -306,9 +335,10 @@ static void start_process(void* aux) {
     free(str_lst);
   }
 
-  printf("aux after: %p\n", e_aux->file_name);
   palloc_free_page(e_aux->file_name);
-  printf("reached\n");
+  cp->load_ok = true;
+
+  sema_up(&cp->load_sema);
 
   // hex_dump((uintptr_t)if_.esp, (void*)if_.esp, 512, true);
 
@@ -401,12 +431,6 @@ int process_wait(pid_t child_pid UNUSED) {
   /* check within children, whether has this child_pid */
   struct process* cur_proc = process_current();
 
-  struct list_elem* e;
-  for (e = list_begin(&process_current()->children); e != list_end(&process_current()->children);
-       e = list_next(e)) {
-    struct child_proc* c_proc = list_entry(e, struct child_proc, elem);
-  }
-
   /* If this thread does not have a PCB, don't worry */
   if (cur_proc == NULL) {
     thread_exit();
@@ -415,33 +439,43 @@ int process_wait(pid_t child_pid UNUSED) {
 
   /* check within children, whether has this child_pid */
   struct child_proc* child_proc = find_child_with_tid(cur_proc, child_pid);
-  if (!child_proc) {
+
+  if (child_proc == NULL) {
     return -1;
   }
   if (child_proc->waited) {
     return -1;
   }
 
-  /* start to wait */
-  child_proc->refcnt += 1;
   child_proc->waited = true;
-  sema_down(&child_proc->wait_sema);
+  if (!child_proc->exited) {
+    // return child_proc->exit_status;
+    /* start to wait */
+    // printf("WAIT: parent_tid=%d wait_pid=%d cp=%p cp->tid=%d cp->parent_pcb=%p\n",
+    //    thread_current()->tid, child_pid,
+    //    child_proc, child_proc->tid, child_proc->parent_process);
+    // printf("WAIT: parent_tid=%d wait_pid=%d cp=%p cp->tid=%d wait_sema=%p\n",
+    //    thread_current()->tid, child_pid,
+    //    child_proc,
+    //    child_proc ? child_proc->tid : -1,
+    //    child_proc ? &child_proc->wait_sema : NULL);
+    sema_down(&child_proc->wait_sema);
+  } else {
+    // printf("WAIT: parent thread: %d already exited before calling wait\n", thread_current()->tid);
+  }
+
+  // printf("thread: %d finished to wait %d\n", thread_current()->tid, child_pid);
+
   int exit_status = child_proc->exit_status;
-  // printf("parent first get exit#: %d\n", exit_status);
+  child_proc->exited = true;
+  // printf("FINISHIING WAIT: parent first get exit#: %d\n", exit_status);
 
-  child_proc->refcnt -= 1;
-  // clean list
   list_remove(&child_proc->elem);
+  free(child_proc);
+  // clean list
+  // printf("FINISHING WAIT: we've cleaned child_proc with addr: %p, after waiting\n", child_proc);
 
-  /* return child_p's exitStatus */
-  if (child_proc->refcnt == 0) {
-    free(child_proc);
-  }
-  if (child_proc->exit_status == -129) {
-    printf("ERROR, waiting process hasn't changed its exit_code\n");
-    return -1;
-  }
-  printf("parent return with exit#: %d\n", exit_status);
+  /* return child_p's exit_status */
   return exit_status;
 }
 
@@ -472,15 +506,21 @@ static bool copy_pagedir(uint32_t* child_pd, uint32_t* parent_pd) {
 
 static void start_fork(void* aux) { // self->eax = 0
   struct fork_proc* fp = (struct fork_proc*)aux;
+
   bool success;
   bool pcb_success;
   struct thread* t = thread_current();
 
   /* 1. copy data */
+  struct child_proc* cp = fp->cp;
+  // printf("GET CP in start_fork: tid: %d\n", cp->tid);
   char* file_name = fp->file_name;
   uint32_t* pagedir = fp->pagedir;
   fdtable* fdtable = fp->fdtable;
   struct intr_frame* if_ = fp->if_;
+  // copy frame & set eas = 0
+  struct intr_frame fork_if_ = *if_;
+  fork_if_.eax = 0;
 
   // printf("PARENT info passed in: filename=%s fdtable=%p files[2]=%p\n",
   // file_name,
@@ -499,18 +539,16 @@ static void start_fork(void* aux) { // self->eax = 0
 
     // Continue initializing the PCB as normal
     t->pcb = new_pcb;
+
+    // printf("SET parent_proc: child_tid=%d pcb=%p parent_cp=%p parent_pcb=%p\n",
+    //        t->tid, t->pcb, cp, cp->parent_process);
+
     t->pcb->main_thread = t;
     strlcpy(t->pcb->process_name, file_name, strlen(file_name) + 1);
 
     /* initialize fdtable */
-    t->pcb->fdtable = malloc(sizeof(struct fdtable));
+    t->pcb->fdtable = calloc(sizeof(struct fdtable), 1);
     fdtable_create(t->pcb->fdtable, 512);
-    //     printf("DEBUG child raw fdtable=%p size=%zu\n",
-    //        t->pcb->fdtable, sizeof(struct fdtable));
-    // printf("DEBUG child fdtable->files=%p bitmap=%p next_index(before copy)=%d\n",
-    //        t->pcb->fdtable->files,
-    //        t->pcb->fdtable->bitmap,
-    //        t->pcb->fdtable->next_index);
 
     ASSERT(t->pcb->fdtable != NULL);
 
@@ -518,20 +556,31 @@ static void start_fork(void* aux) { // self->eax = 0
     list_init(&t->pcb->children);
     ASSERT(&t->pcb->children != NULL);
 
-    t->pcb->parent_proc = fp->cp;
+    /* TODDDDDDDDDDDDO */
+
+    /* User threads */
+    list_init(&t->pcb->user_threads);
+    lock_init(&t->pcb->free_page_lock);
+    lock_init(&t->pcb->child_global_lock);
+    sema_init(&t->pcb->process_exit_sema, 0); // for process exit
+
+    t->pcb->next_free_page = 1;
+
+    t->pcb->parent_proc = cp;
   }
 
   /* Handle failure with succesful PCB malloc. Must free the PCB */
-  if (!success && pcb_success) {
+  if (!success || !pcb_success) {
     // Avoid race where PCB is freed before t->pcb is set to NULL
     // If this happens, then an unfortuantely timed timer interrupt
     // can try to activate the pagedir, but it is now freed memory
-
+    // free_table(t->pcb->fdtable);
     struct process* pcb_to_free = t->pcb;
     t->pcb = NULL;
     free(pcb_to_free);
-    fp->load_ok = false;
-    sema_up(&fp->load_sema);
+    cp->load_ok = false;
+    sema_up(&cp->load_sema);
+    thread_current()->exit_status = -1;
     process_exit();
   }
 
@@ -539,19 +588,24 @@ static void start_fork(void* aux) { // self->eax = 0
   // copy pagedir
   t->pcb->pagedir = pagedir_create();
   if (t->pcb->pagedir == NULL) {
+    // free_table(t->pcb->fdtable);
     struct process* pcb_to_free = t->pcb;
     t->pcb = NULL;
     free(pcb_to_free);
 
-    fp->load_ok = false;
-    sema_up(&fp->load_sema);
+    cp->load_ok = false;
+    sema_up(&cp->load_sema);
+    thread_current()->exit_status = -1;
     process_exit();
   }
+
   if (!copy_pagedir(t->pcb->pagedir, pagedir)) {
     // clean up (free pages you've already added if you track them,
     // or just kill the child for now)
-    fp->load_ok = false;
-    sema_up(&fp->load_sema);
+    // free_table(t->pcb->fdtable);
+    cp->load_ok = false;
+    sema_up(&cp->load_sema);
+    thread_current()->exit_status = -1;
     process_exit();
   }
 
@@ -562,11 +616,11 @@ static void start_fork(void* aux) { // self->eax = 0
   //      t->pcb->fdtable->files[2],
   //      fdtable->files[2]);
 
-  sema_up(&fp->load_sema);
-
-  // copy frame & set eas = 0
-  struct intr_frame fork_if_ = *if_;
-  fork_if_.eax = 0;
+  // printf("FORK CHILD: thread: %d load success, gonna notify parnet with sema: %p\n", thread_current()->tid, &cp->load_sema);
+  /* Create thread_end_status and Add current thtread to parent process */
+  add_current_thread_to_process(thread_current()->tid);
+  cp->load_ok = true;
+  sema_up(&cp->load_sema);
 
   // printf("FINAL child setup: pid=%d pcb=%p fdtable=%p files[2]=%p\n",
   //     t->tid,
@@ -580,74 +634,107 @@ static void start_fork(void* aux) { // self->eax = 0
 }
 
 pid_t process_fork(struct intr_frame* f) {
-  /* 1. create child process with aux including pagedir, fdtable, if_ */
-  // get file_name...
-  tid_t tid;
 
+  /* 1. create child process with aux including pagedir, fdtable, if_ */
+  tid_t tid;
   struct process* cur_proc = process_current();
 
+  /* 1.1. Initialize child_proc for child process */
   struct child_proc* cp = calloc(sizeof(struct child_proc), 1);
   create_child_proc(cp);
-  list_push_front(&process_current()->children, &cp->elem);
+  // printf("FORK: NEW CP: parent_tid=%d cp=%p wait_sema=%p\n",
+  //      thread_current()->tid, cp, &cp->wait_sema);
 
+  // printf("thread: %d, forked child addr: %p\n", thread_current()->tid, cp);
+  cp->parent_process = cur_proc;
+
+  list_push_front(&cur_proc->children, &cp->elem);
+  // printf("FORK: thread: %d, added child \n", thread_current()->tid);
   char* file_name = cur_proc->process_name;
   uint32_t* pagedir = cur_proc->pagedir;
   fdtable* fdtable = cur_proc->fdtable;
 
-  // assemble fork_aux
-  struct fork_proc* fp = malloc(sizeof(struct fork_proc));
-  create_fork_proc(fp);
+  /* 1.2. Assemble fork_aux */
+  struct fork_proc* fp = calloc(sizeof(struct fork_proc), 1);
   fp->file_name = file_name;
   fp->pagedir = pagedir;
   fp->fdtable = fdtable;
   fp->if_ = f;
   fp->cp = cp;
 
-  //   printf("DEBUG parent pcb=%p fdtable=%p\n", cur_proc, cur_proc->fdtable);
-  // printf("DEBUG parent fdtable struct size=%zu\n", sizeof(struct fdtable));
-  // printf("DEBUG parent fdtable->files=%p bitmap=%p next_index=%d\n",
-  //        cur_proc->fdtable->files,
-  //        cur_proc->fdtable->bitmap,
-  //        cur_proc->fdtable->next_index);
-
   tid = thread_create(file_name, PRI_DEFAULT, start_fork, fp);
   if (tid == TID_ERROR) {
-    // free_fork_proc(fp);
+    list_remove(&cp->elem);
+    free(fp);
     list_remove(&cp->elem);
     free(cp);
-    free_fork_proc(fp);
     return -1;
   }
+  cp->tid = tid;
+  // printf("SET CP TID: cp=%p tid=%d\n", cp, tid);
 
   /* 2. wait for fork load success */
-  sema_down(&fp->load_sema);
+  if (!cp->load_ok) {
+    // printf("thread: %d, waiting on sema: %p\n", thread_current()->tid, &cp->load_sema);
+    sema_down(&cp->load_sema);
+    // printf("FORK: thread: %d, child finished setting up\n", thread_current()->tid);
+  }
 
-  if (!fp->load_ok) {
+  if (!cp->load_ok) {
     // free_fork_proc(fp);
     list_remove(&cp->elem);
     free(cp);
-    free_fork_proc(fp);
+    free(fp);
     return -1;
   }
 
-  /* 3. add child proc into waiting list */
-
-  cp->tid = tid;
-
-  free_fork_proc(fp);
-  // printf("parent success\n");
   /* 3. return tid or -1 */
+  free(fp);
   return tid;
 }
 
-/* Free the current process's resources. */
+/* Func used by Sys_exit, wait for all pthreads before really end process
+*/
 void process_exit(void) {
+  struct thread* t = thread_current();
+  struct process* p = t->pcb;
+  if (!p) {
+    return;
+  }
+
+  /* Set process's killed = true & wait for all threads to end */
+  lock_acquire(&p->child_global_lock);
+  if (p->killed) { // If the process is already exited, end this pthread
+    lock_release(&p->child_global_lock);
+    pthread_exit();
+    NOT_REACHED();
+  }
+  p->killed = true;
+  size_t pthread_ct = p->user_thread_count;
+  /* Wait for all pthreads to end */
+  if (pthread_ct > 1) {
+    lock_release(&p->child_global_lock);
+    sema_down(&p->process_exit_sema);
+    lock_acquire(&p->child_global_lock);
+  }
+
+  /* Make sure there is only thread_current() when waking up */
+  pthread_ct = p->user_thread_count;
+  lock_release(&p->child_global_lock);
+  ASSERT(pthread_ct == 1);
+
+  /* End current process as main thread */
+  pthread_exit_main();
+  NOT_REACHED();
+}
+
+/* The main logic of exit of the whole process */
+static void end_process(void) {
   struct thread* cur = thread_current();
   uint32_t* pd;
 
-  // 在实现 exit(status) 的地方
-  printf("[EXIT] %s(pid=%d) status=%d\n", thread_current()->name, thread_current()->tid,
-         cur->exit_status);
+  // printf("[EXIT] %s(pid=%d) status=%d\n", thread_current()->name, thread_current()->tid,
+  //  cur->exit_status);
 
   /* If this thread does not have a PCB, don't worry */
   if (cur->pcb == NULL) {
@@ -657,12 +744,75 @@ void process_exit(void) {
 
   if (cur->exit_status < 0)
     cur->exit_status = -1;
+
   // printf("%s: exit(%d) @ thread: %d\n", cur->name, cur->exit_status, cur->tid);
-  printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+
+  if (cur->pcb->parent_proc) {
+    /* notify parent if have one */
+
+    struct child_proc* parent_proc = cur->pcb->parent_proc;
+    parent_proc->exit_status = cur->exit_status;
+    parent_proc->exited = true;
+
+    if (!parent_proc->parent_process) {
+      free(parent_proc);
+    } else {
+      sema_up(&parent_proc->wait_sema);
+      // printf("EXIT: thread: %d will exit, notified parent, with wait_sema: %p\n", thread_current()->tid, &parent_proc->wait_sema);
+    }
+  }
+
+  /* Clean all child processes */
+  struct process* cur_proc = cur->pcb;
+
+  for (struct list_elem* e = list_begin(&cur_proc->children); e != list_end(&cur_proc->children);) {
+    struct list_elem* next = list_next(e);
+    struct child_proc* c_proc = list_entry(e, struct child_proc, elem);
+
+    if (c_proc->exited) { // Only clean process which are already exited
+      list_remove(e);
+      c_proc->parent_process = NULL;
+      free(c_proc);
+      c_proc = NULL;
+    } else { // Else mark them as orphan
+      list_remove(e);
+      c_proc->parent_process = NULL;
+    }
+
+    e = next;
+  }
+
+  // struct list *user_threads = &cur_proc->user_threads;
+  // for (struct list_elem *e = list_begin(user_threads);
+  //     e != list_end(user_threads);) {
+  //   struct list_elem *nxt = list_next(e);
+  //   struct thread_end_status *tes = list_entry(e, struct thread_end_status, user_elem);
+  //   // printf("removing user_elem addr: %p for thread: %d\n", &tes->user_elem, tes->tid);
+  //   lock_acquire(&tes->status_lock);
+  //   /* Set status of thread */
+  //   /* Clean whole pagedir next, not here */
+  //   if (tes->thread) {
+  //     tes->thread->exited = true;
+  //   }
+
+  //   /* Set psb-related vars */
+  //   list_remove(&tes->user_elem);
+  //   cur_proc->user_thread_count--;
+  //   size_t ct = cur_proc->user_thread_count;
+
+  //   lock_release(&tes->status_lock);
+  //   printf("still have thread coutns: %u\n", ct);
+  //   free(tes);
+
+  //   e = nxt;
+  // }
+  // lock_release(&cur_proc->child_global_lock);
+
+  printf("%s: exit(%d)\n", cur_proc->process_name, cur->exit_status);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
-  pd = cur->pcb->pagedir;
+  pd = cur_proc->pagedir;
   if (pd != NULL) {
     /* Correct ordering here is crucial.  We must set
          cur->pcb->pagedir to NULL before switching page directories,
@@ -671,26 +821,22 @@ void process_exit(void) {
          directory before destroying the process's page
          directory, or our active page directory will be one
          that's been freed (and cleared). */
-    cur->pcb->pagedir = NULL;
+    cur_proc->pagedir = NULL;
     pagedir_activate(NULL);
     pagedir_destroy(pd);
   }
 
-  if (cur->pcb->fdtable) {
-    free_table(cur->pcb->fdtable);
+  if (cur_proc->fdtable) {
+    free_table(cur_proc->fdtable);
   }
 
+  if (cur_proc->sync_table) {
+    free(cur_proc->sync_table);
+  }
   /* Free the PCB of this process and kill this thread
      Avoid race where PCB is freed before t->pcb is set to NULL
      If this happens, then an unfortuantely timed timer interrupt
      can try to activate the pagedir, but it is now freed memory */
-  if (cur->pcb->parent_proc) {
-    /* notify parent if have one */
-    struct child_proc* parent_proc = cur->pcb->parent_proc;
-    printf("gonna notify parent with exit#: %d\n", cur->exit_status);
-    parent_proc->exit_status = cur->exit_status;
-    sema_up(&parent_proc->wait_sema);
-  }
 
   if (cur->pcb->exec_file) {
     file_allow_write(cur->pcb->exec_file);
@@ -704,7 +850,7 @@ void process_exit(void) {
   cur->pcb = NULL;
   free(pcb_to_free);
 
-  sema_up(&temporary);
+  // printf("process %d exited\n", thread_current()->tid);
   thread_exit();
 }
 
@@ -809,14 +955,14 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
   process_activate();
 
   /* Open executable file. */
+  lock_acquire(&filesys_lock);
   file = filesys_open(file_name);
+  lock_release(&filesys_lock);
+
   if (file == NULL) {
-    printf("load file failed with name: %s\n", file_name);
     printf("load: %s: open failed\n", file_name);
     goto done;
   }
-
-  printf("load file success with name: %s\n", file_name);
 
   /* Read and verify executable header. */
   if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr ||
@@ -888,11 +1034,15 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
 done:
   /* We arrive here whether the load is successful or not. */
 
-  t->pcb->exec_file = file;
-  if (t->pcb->exec_file)
+  if (success) {
+    t->pcb->exec_file = file;
     file_deny_write(file);
+  } else {
+    if (file != NULL)
+      file_close(file);
+    t->pcb->exec_file = NULL;
+  }
 
-  // file_close(file);
   return success;
 }
 
@@ -997,6 +1147,7 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
 
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
+/* Need to revise on */
 static bool setup_stack(void** esp) {
   uint8_t* kpage;
   bool success = false;
@@ -1044,7 +1195,63 @@ pid_t get_pid(struct process* p) { return (pid_t)p->main_thread->tid; }
    This function will be implemented in Project 2: Multithreading. For
    now, it does nothing. You may find it necessary to change the
    function signature. */
-bool setup_thread(void (**eip)(void) UNUSED, void** esp UNUSED) { return false; }
+
+bool setup_thread(void (**eip)(void), void** esp, struct pthread_aux* pa) {
+  struct thread* t = thread_current();
+  stub_fun sfun = pa->sfun;
+  pthread_fun tfun = pa->tfun;
+  void* arg = pa->arg;
+  struct process* pcb = pa->pcb;
+
+  /* 0. Setup data related to PCB */
+  t->pcb = pcb;
+  /* Activate resources */
+  process_activate();
+
+  /* 1. Initialize stack */
+  uint8_t* kpage;
+  bool success = false;
+
+  kpage = palloc_get_page(PAL_USER | PAL_ZERO);
+  if (!kpage) {
+    printf("alloc kpage failed\n");
+    return success;
+  }
+
+  /* Initialize only one page */
+  /* Get next free page number */
+  size_t next_index = get_next_free_index();
+  uint8_t* stack_top = ((uint8_t*)PHYS_BASE) - next_index * PGSIZE; // top of stack
+  uint8_t* stack_bottom = t->user_stack_page = stack_top - PGSIZE;
+
+  success = install_page(stack_bottom, kpage, true);
+  if (!success) {
+    printf("installed failed\n");
+    palloc_free_page(kpage);
+    return success;
+  }
+
+  t->user_page_count = 1;
+
+  /* 2. Fill stack data */
+  *esp = stack_top;
+  /* push arg */
+  *esp -= sizeof(void*);
+  memcpy(*esp, &arg, sizeof(void*));
+
+  /* push fun */
+  *esp -= sizeof(pthread_fun);
+  memcpy(*esp, &tfun, sizeof(pthread_fun));
+
+  /* push fake return address (can be 0) */
+  void* fake_ret = NULL;
+  *esp -= sizeof(void*);
+  memcpy(*esp, &fake_ret, sizeof(void*));
+
+  /* 3. Initialize eip  */
+  *eip = pa->sfun;
+  return success;
+}
 
 /* Starts a new thread with a new user stack running SF, which takes
    TF and ARG as arguments on its user stack. This new thread may be
@@ -1055,7 +1262,30 @@ bool setup_thread(void (**eip)(void) UNUSED, void** esp UNUSED) { return false; 
    This function will be implemented in Project 2: Multithreading and
    should be similar to process_execute (). For now, it does nothing.
    */
-tid_t pthread_execute(stub_fun sf UNUSED, pthread_fun tf UNUSED, void* arg UNUSED) { return -1; }
+tid_t pthread_execute(stub_fun sf UNUSED, pthread_fun tf UNUSED, void* arg UNUSED) {
+  /* Fill sfun, tfun, arg into e_aux */
+  struct pthread_aux* pa = calloc(sizeof(struct pthread_aux), 1);
+  pa->sfun = sf;
+  pa->tfun = tf;
+  pa->arg = arg;
+  pa->pcb = thread_current()->pcb;
+  pa->is_user_thread = 1;
+
+  /* Create a new thread & execute sfun with args */
+  tid_t tid = thread_create("uthread", PRI_DEFAULT, start_pthread, pa);
+  // thread_yield();
+  if (tid == TID_ERROR) {
+    goto err_create;
+  }
+
+  /* Create thread_end_status and Add current thtread to parent process */
+  add_current_thread_to_process(tid);
+
+  /* Error handler */
+err_create:
+  // free(pa);
+  return tid;
+}
 
 /* A thread function that creates a new user thread and starts it
    running. Responsible for adding itself to the list of threads in
@@ -1063,7 +1293,45 @@ tid_t pthread_execute(stub_fun sf UNUSED, pthread_fun tf UNUSED, void* arg UNUSE
 
    This function will be implemented in Project 2: Multithreading and
    should be similar to start_process (). For now, it does nothing. */
-static void start_pthread(void* exec_ UNUSED) {}
+/* UNFINISHED */
+void start_pthread(void* exec_) {
+  // printf("start to run user_thread \n");
+  /* Set eip and esp based on aux */
+  struct pthread_aux* pa = (struct pthread_aux*)exec_;
+
+  /* Return advanced if no thread_func */
+  if (!pa->tfun) {
+    printf("no tfun\n");
+    if (pa)
+      free(pa);
+    thread_current()->exit_status = -1;
+    pthread_exit();
+    NOT_REACHED();
+  }
+
+  /* Build intr_frame & Setup thread */
+  struct intr_frame if_;
+  memset(&if_, 0, sizeof if_);
+  if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
+  if_.cs = SEL_UCSEG;
+  if_.eflags = FLAG_IF | FLAG_MBS;
+
+  if (!setup_thread(&if_.eip, &if_.esp, pa)) {
+    printf("setup thread failed\n");
+    if (pa)
+      free(pa);
+    thread_current()->exit_status = -1;
+    pthread_exit();
+    NOT_REACHED();
+  }
+  // hex_dump((uintptr_t)if_.esp, (void*)if_.esp, 512, true);
+  /* Only free pa when finshing setting up thread */
+  free(pa);
+
+  /* Jump to stub func */
+  asm volatile("movl %0, %%esp; jmp intr_exit" : : "g"(&if_) : "memory");
+  NOT_REACHED();
+}
 
 /* Waits for thread with TID to die, if that thread was spawned
    in the same process and has not been waited on yet. Returns TID on
@@ -1072,7 +1340,102 @@ static void start_pthread(void* exec_ UNUSED) {}
 
    This function will be implemented in Project 2: Multithreading. For
    now, it does nothing. */
-tid_t pthread_join(tid_t tid UNUSED) { return -1; }
+tid_t pthread_join(tid_t tid) {
+  if (tid == TID_ERROR) {
+    return TID_ERROR;
+  }
+  /* Find thread, exit if not found with process_lock */
+  struct thread* cur_t = thread_current();
+  struct process* process = cur_t->pcb;
+
+  /* Find tes from process list, to chech waiting & exiting status */
+  struct thread_end_status* tes = NULL;
+  struct list* tess = &process->user_threads;
+
+  lock_acquire(&process->child_global_lock);
+  for (struct list_elem* e = list_begin(tess); e != list_end(tess); e = list_next(e)) {
+    struct thread_end_status* tes_ = list_entry(e, struct thread_end_status, user_elem);
+    if (tes_->tid == tid) {
+      tes = tes_;
+      break;
+    }
+  }
+  lock_release(&process->child_global_lock);
+
+  if (!tes) {
+    return TID_ERROR;
+  }
+
+  ASSERT(tes->magic == 0x54455321);
+
+  if (!tes) {
+    printf("NOT FOUND WITH thread tid: %d\n", tid);
+    return TID_ERROR;
+  }
+
+  /* If we find one, check waited */
+  lock_acquire(&tes->status_lock);
+  if (tes->is_waited) {
+    lock_release(&tes->status_lock);
+    return TID_ERROR;
+  }
+  tes->is_waited = true;
+
+  /* Start to wait */
+  if (!tes->exited) {
+    lock_release(&tes->status_lock);
+    // printf("thread %d is waiting for %d one sema: %p\n", thread_current()->tid, tid, &tes->join_sema);
+    sema_down(&tes->join_sema);
+    // printf("thread %d finished wait %d\n", thread_current()->tid, tid);
+  } else {
+    lock_release(&tes->status_lock);
+  }
+
+  /* Clean up */
+  lock_acquire(&process->child_global_lock);
+  list_remove(&tes->user_elem);
+  lock_release(&process->child_global_lock);
+  // printf("removing user_elem addr: %p for thread: %d\n", &tes->user_elem, tes->tid);
+  free(tes);
+  tes->magic = 0xDEADDEAD;
+  return tid;
+}
+
+/* Clean helper function for non-main thread */
+// static void pthread_exit_normal() {
+//   struct process *process = t->pcb;
+//   struct list *user_threads = &process->user_threads;
+
+//   /* Set cur_process to killed*/
+
+//   /* Remove all elems in user_threads */
+//   lock_acquire(&t->pcb->child_global_lock);
+//   for (struct list_elem *e = list_begin(user_threads);
+//       e != list_end(user_threads);) {
+//     struct list_elem *nxt = list_next(e);
+//     struct thread_end_status *tes = list_entry(e, struct thread_end_status, user_elem);
+//     // printf("removing user_elem addr: %p for thread: %d\n", &tes->user_elem, tes->tid);
+//     lock_acquire(&tes->status_lock);
+//     list_remove(&tes->user_elem);
+//     process->user_thread_count--;
+//     size_t ct = process->user_thread_count;
+//     lock_release(&tes->status_lock);
+//     printf("still have thread coutns: %u\n", ct);
+//     free(tes);
+
+//     e = nxt;
+//   }
+//   lock_release(&t->pcb->child_global_lock);
+
+//   /* TODO if we need more spaces, Deallocate thread's userspace stack */
+//   // for (size_t i = 0; i < t->user_page_count; i++) {
+//   // void *upage = t->user_stack_page;
+//   // void *kpage = pagedir_get_page(t->pcb->pagedir, upage);
+//   // pagedir_clear_page(t->pcb->pagedir, upage);
+//   // palloc_free_page(kpage);
+//   // t->user_stack_page = NULL;
+//   // }
+// }
 
 /* Free the current thread's resources. Most resources will
    be freed on thread_exit(), so all we have to do is deallocate the
@@ -1083,7 +1446,82 @@ tid_t pthread_join(tid_t tid UNUSED) { return -1; }
 
    This function will be implemented in Project 2: Multithreading. For
    now, it does nothing. */
-void pthread_exit(void) {}
+
+/* 
+  Every thread is able to call this function, 
+  will call pthread_exit_main by determining the remaining ct of user threads
+*/
+void pthread_exit(void) {
+  struct thread* t = thread_current();
+  struct process* process = t->pcb;
+  struct list* user_threads = &process->user_threads;
+  struct list* tess = &process->user_threads;
+  struct thread_end_status* tes = NULL;
+  // printf("thread %d gonna exit\n", t->tid);
+
+  lock_acquire(&process->child_global_lock);
+  for (struct list_elem* e = list_begin(tess); e != list_end(tess); e = list_next(e)) {
+    struct thread_end_status* tes_ = list_entry(e, struct thread_end_status, user_elem);
+    if (tes_->tid == t->tid) {
+      tes = tes_;
+      break;
+    }
+  }
+  lock_release(&process->child_global_lock);
+  // printf("thread: %d ready to exit with tes: %p on sema: %p\n", t->tid, tes, tes->gen, );
+
+  /* Wake up any joiners of this thread */
+  /* Find thread_end_status from process */
+  if (tes) {
+    lock_acquire(&tes->status_lock);
+
+    tes->exited = true;
+    if (t->exit_status < 0) {
+      tes->exit_status = -1;
+    } else {
+      tes->exit_status = t->exit_status;
+    }
+    sema_up(&tes->join_sema);
+    // printf("thread: %d exiting, has notified sema: %p with tes's gen: %u\n", t->tid, &tes->join_sema, tes->gen);
+
+    lock_release(&tes->status_lock);
+
+  } else {
+    // printf("thread: %d dont have tes\n", t->tid);
+  }
+
+  /* Clean the stack of this thread */
+  void* upage = t->user_stack_page;
+  void* kpage = pagedir_get_page(t->pcb->pagedir, upage);
+  pagedir_clear_page(t->pcb->pagedir, upage);
+  palloc_free_page(kpage);
+  t->user_stack_page = NULL;
+
+  /* Check whether this thread is last thread to exit 
+    or the last thread besides the thread killed tht process
+    just exit thread if else
+  */
+  lock_acquire(&process->child_global_lock);
+  // printf("have %u threads left, the is %d killed\n", process->user_thread_count, process->killed);
+  if (process->user_thread_count == 1) {
+    size_t ct = process->user_thread_count;
+    lock_release(&process->child_global_lock);
+
+    pthread_exit_main();
+    NOT_REACHED();
+
+  } else if (process->user_thread_count == 2 && process->killed) {
+    /* Notify the thread that called exit() */
+    sema_up(&process->process_exit_sema);
+  }
+  process->user_thread_count--;
+  lock_release(&process->child_global_lock);
+  /* For non-main thread, just call thread_exit() to collect resources */
+  thread_exit();
+  NOT_REACHED();
+  // printf("main thread id: %d\n", thread_current()->pcb->main_thread->tid);
+  // printf("thread with tid: %d goona end\n", thread_current()->tid);
+}
 
 /* Only to be used when the main thread explicitly calls pthread_exit.
    The main thread should wait on all threads in the process to
@@ -1093,8 +1531,45 @@ void pthread_exit(void) {}
 
    This function will be implemented in Project 2: Multithreading. For
    now, it does nothing. */
-void pthread_exit_main(void) {}
+void pthread_exit_main(void) {
+  struct thread* t = thread_current();
+  struct process* process = t->pcb;
+  struct list* user_threads = &process->user_threads;
+
+  /* Remove all elems in user_threads */
+  lock_acquire(&t->pcb->child_global_lock);
+  for (struct list_elem* e = list_begin(user_threads); e != list_end(user_threads);) {
+    struct list_elem* nxt = list_next(e);
+    struct thread_end_status* tes = list_entry(e, struct thread_end_status, user_elem);
+    // printf("removing user_elem addr: %p for thread: %d\n", &tes->user_elem, tes->tid);
+    lock_acquire(&tes->status_lock);
+    list_remove(&tes->user_elem);
+    // process->user_thread_count--;
+    // size_t ct = process->user_thread_count;
+    lock_release(&tes->status_lock);
+    // printf("still have thread coutns: %u\n", ct);
+    free(tes);
+
+    e = nxt;
+  }
+  lock_release(&t->pcb->child_global_lock);
+
+  /* This function will only be called by last thread in process 
+      JUST CALL PROCESS_EXIT */
+  end_process();
+  NOT_REACHED();
+}
 
 struct process* process_current(void) {
   return thread_current()->pcb;
+}
+
+static size_t get_next_free_index() {
+  struct thread* t = thread_current();
+  lock_acquire(&t->pcb->free_page_lock);
+  size_t i = t->pcb->next_free_page;
+  t->pcb->next_free_page++;
+
+  lock_release(&t->pcb->free_page_lock);
+  return i;
 }

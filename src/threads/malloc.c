@@ -99,8 +99,9 @@ void* malloc(size_t size) {
          Allocate enough pages to hold SIZE plus an arena. */
     size_t page_cnt = DIV_ROUND_UP(size + sizeof *a, PGSIZE);
     a = palloc_get_multiple(0, page_cnt);
-    if (a == NULL)
+    if (a == NULL) {
       return NULL;
+    }
 
     /* Initialize the arena to indicate a big block of PAGE_CNT
          pages, and return it. */
@@ -149,8 +150,9 @@ void* calloc(size_t a, size_t b) {
 
   /* Calculate block size and make sure it fits in size_t. */
   size = a * b;
-  if (size < a || size < b)
+  if (size < a || size < b) {
     return NULL;
+  }
 
   /* Allocate and zero memory. */
   p = malloc(size);

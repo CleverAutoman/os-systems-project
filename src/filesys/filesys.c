@@ -57,12 +57,14 @@ struct file* filesys_open(const char* name) {
   struct dir* dir = dir_open_root();
   struct inode* inode = NULL;
 
-  if (dir != NULL)
-    dir_lookup(dir, name, &inode);
+  if (dir != NULL) {
+    bool ok = dir_lookup(dir, name, &inode);
+    // printf("DEBUG: dir_lookup(%s) -> %s, inode=%p\n",
+    //  name, ok ? "found" : "not found", inode);
+  }
   dir_close(dir);
 
   struct file* f = file_open(inode);
-  printf("file = %p, name = %s\n", f, name);
   return f;
 }
 
@@ -71,6 +73,7 @@ struct file* filesys_open(const char* name) {
    Fails if no file named NAME exists,
    or if an internal memory allocation fails. */
 bool filesys_remove(const char* name) {
+  // printf("DEBUG: filesys_remove(%s)\n", name);
   struct dir* dir = dir_open_root();
   bool success = dir != NULL && dir_remove(dir, name);
   dir_close(dir);

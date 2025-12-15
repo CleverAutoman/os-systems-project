@@ -57,15 +57,18 @@ void test_main(void) {
   for (int i = 0; i < NUM_THREADS; i++)
     tids[i] = pthread_check_create(file_io, &fd);
 
+  msg("1");
   // Wait on all threads
   for (int i = 0; i < NUM_THREADS; i++)
     pthread_check_join(tids[i]);
 
+  msg("2");
   // Spawn IO threads again
   for (int i = 0; i < NUM_THREADS; i++)
     tids[i] = pthread_check_create(file_io, &fd);
 
   // This should join on all the threads
+  msg("3");
   pthread_exit();
   NOT_REACHED();
 }

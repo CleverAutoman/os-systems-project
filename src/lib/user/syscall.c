@@ -131,28 +131,36 @@ bool lock_init(lock_t* lock) { return syscall1(SYS_LOCK_INIT, lock); }
 
 void lock_acquire(lock_t* lock) {
   bool success = syscall1(SYS_LOCK_ACQUIRE, lock);
-  if (!success)
+  if (!success) {
+    // printf("lock acquire here\n");
     exit(1);
+  }
 }
 
 void lock_release(lock_t* lock) {
   bool success = syscall1(SYS_LOCK_RELEASE, lock);
-  if (!success)
+  if (!success) {
+    // printf("lock release here\n");
     exit(1);
+  }
 }
 
 bool sema_init(sema_t* sema, int val) { return syscall2(SYS_SEMA_INIT, sema, val); }
 
 void sema_down(sema_t* sema) {
   bool success = syscall1(SYS_SEMA_DOWN, sema);
-  if (!success)
+  if (!success) {
+    // printf("sema down here\n");
     exit(1);
+  }
 }
 
 void sema_up(sema_t* sema) {
   bool success = syscall1(SYS_SEMA_UP, sema);
-  if (!success)
+  if (!success) {
+    // printf("sema up here\n");
     exit(1);
+  }
 }
 
 tid_t get_tid(void) { return syscall0(SYS_GET_TID); }

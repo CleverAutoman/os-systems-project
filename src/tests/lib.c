@@ -88,21 +88,26 @@ void lock_check_init(lock_t* lock) {
 
 /* Initializes a semaphore and checks return value */
 void sema_check_init(sema_t* sema, int val) {
-  if (!sema_init(sema, val))
+  if (!sema_init(sema, val)) {
+    printf("sema failed\n");
     exit(1);
+  }
 }
 
 /* Joins and checks return value */
 void pthread_check_join(tid_t tid) {
-  if (!pthread_join(tid))
+  if (!pthread_join(tid)) {
+    printf("pjoin failed\n");
     exit(1);
+  }
 }
 
 /* Creates a thread and checks return value */
 tid_t pthread_check_create(pthread_fun fun, void* arg) {
   tid_t tid = pthread_create(fun, arg);
-  if (tid == TID_ERROR)
+  if (tid == TID_ERROR) {
     exit(1);
+  }
   return tid;
 }
 

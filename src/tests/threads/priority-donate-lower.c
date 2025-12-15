@@ -24,11 +24,16 @@ void test_priority_donate_lower(void) {
   lock_init(&lock);
   lock_acquire(&lock);
   thread_create("acquire", PRI_DEFAULT + 10, acquire_thread_func, &lock);
+  // printf("before setting donated priority: %d\n", thread_current()->donated_priority);
+
   msg("Main thread should have priority %d.  Actual priority: %d.", PRI_DEFAULT + 10,
       thread_get_priority());
+  // printf("2 before setting donated priority: %d\n", thread_current()->donated_priority);
 
   msg("Lowering base priority...");
   thread_set_priority(PRI_DEFAULT - 10);
+  // printf("after setting donated priority: %d\n", thread_current()->donated_priority);
+
   msg("Main thread should have priority %d.  Actual priority: %d.", PRI_DEFAULT + 10,
       thread_get_priority());
   lock_release(&lock);

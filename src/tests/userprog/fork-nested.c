@@ -15,7 +15,7 @@ void test_main(void) {
   if (pid1 == 0) {
     pid_t pid2 = fork(); // Second fork (nested)
     testvar++;
-
+    // printf("we are now in second fork after FORK with pid=%d\n", pid2);
     msg("Testvar should be 2 but is %d", testvar);
 
     if (pid2 < 0) {

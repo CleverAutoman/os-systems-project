@@ -39,6 +39,7 @@ void test_priority_condvar(void) {
 }
 
 static void priority_condvar_thread(void* aux UNUSED) {
+  // msg("Thread %s starting with thread id: %d.", thread_name(), thread_current()->tid);
   msg("Thread %s starting.", thread_name());
   lock_acquire(&lock);
   cond_wait(&condition, &lock);

@@ -64,6 +64,7 @@ userprog_SRC += userprog/gdt.c		# GDT initialization.
 userprog_SRC += userprog/tss.c		# TSS management.
 userprog_SRC += userprog/fdtable.c  # fdtable.
 userprog_SRC += userprog/child_proc.c  # child_proc.
+userprog_SRC += userprog/sync_table.c  # pthread_sync_table.
 
 # No virtual memory code yet.
 #vm_SRC = vm/file.c			# Some file.

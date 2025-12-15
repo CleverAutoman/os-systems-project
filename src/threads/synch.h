@@ -3,11 +3,14 @@
 
 #include <list.h>
 #include <stdbool.h>
+// #include "threads/thread.h"
+
+struct thread;
 
 /* A counting semaphore. */
 struct semaphore {
   unsigned value;      /* Current value. */
-  struct list waiters; /* List of waiting threads. */
+  struct list waiters; /* List of waiting threads, from small -> big in priority policy*/
 };
 
 void sema_init(struct semaphore*, unsigned value);
@@ -18,8 +21,9 @@ void sema_self_test(void);
 
 /* Lock. */
 struct lock {
-  struct thread* holder;      /* Thread holding lock (for debugging). */
-  struct semaphore semaphore; /* Binary semaphore controlling access. */
+  struct thread* holder;              /* Thread holding lock (for debugging). */
+  struct semaphore semaphore;         /* Binary semaphore controlling access. */
+  struct list_elem holding_lock_elem; /* Elem for thread's waiting list */
 };
 
 void lock_init(struct lock*);
@@ -31,6 +35,9 @@ bool lock_held_by_current_thread(const struct lock*);
 /* Condition variable. */
 struct condition {
   struct list waiters; /* List of waiting threads. */
+
+  // Need to change to list instead of map
+  struct list priority_waiters[64]; /* List of priority waiters*/
 };
 
 void cond_init(struct condition*);

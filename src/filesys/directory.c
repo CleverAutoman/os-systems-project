@@ -103,6 +103,10 @@ bool dir_lookup(const struct dir* dir, const char* name, struct inode** inode) {
   else
     *inode = NULL;
 
+  if (inode == NULL) {
+    printf("DEBUG: inode_open malloc failed (sector=%u)\n", e.inode_sector);
+  }
+
   return *inode != NULL;
 }
 
@@ -153,6 +157,7 @@ done:
    Returns true if successful, false on failure,
    which occurs only if there is no file with the given NAME. */
 bool dir_remove(struct dir* dir, const char* name) {
+  // printf("DEBUG: dir_remove(%p, %s)\n", dir, name);
   struct dir_entry e;
   struct inode* inode = NULL;
   bool success = false;

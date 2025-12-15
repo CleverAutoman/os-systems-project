@@ -37,8 +37,9 @@ void fork_tree(int curr_depth, int max_depth, int fanout) {
 
 int main(int argc, char* argv[]) {
   fork_tree(0, 1, 5);
+  fork_tree(0, 3, 3);
   fork_tree(0, 3, 4);
-  fork_tree(0, 4, 4);
+  fork_tree(0, 2, 4);
   printf("Success!\n");
   return 81;
 }

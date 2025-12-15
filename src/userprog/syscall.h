@@ -5,10 +5,14 @@
 #include "userprog/process.h"
 #include "threads/interrupt.h"
 #include "userprog/fdtable.h"
+#include "userprog/sync_table.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
 #include <limits.h>
 
 void syscall_init(void);
+// struct lock_t;
+// struct sema_t;
 
 /**
  * Syscall Signatures
@@ -45,5 +49,42 @@ int tell(int fd);
 void close(int fd);
 
 int write(int fd, const void* buffer, unsigned size);
+
+/**
+ *  Pthread operations
+ */
+tid_t sys_pthread_create(stub_fun sfun, pthread_fun tfun, const void* arg);
+
+void sys_pthread_exit(void) NO_RETURN;
+
+tid_t sys_pthread_join(tid_t tid);
+
+bool sys_lock_init(char* lock);
+
+bool sys_lock_acquire(char* lock);
+
+bool sys_lock_release(char* lock);
+
+bool sys_sema_init(char* sema, int val);
+
+bool sys_sema_down(char* sema);
+
+bool sys_sema_up(char* sema);
+
+tid_t get_tid(void);
+
+/* Pthread SYNCH */
+
+// struct lock_t {
+//   int holder;      // or tid
+//   int locked;
+//   struct lock lock;
+// };
+
+// struct sema_t {
+//   int holder;      // or tid
+//   int locked;
+//   struct semaphore sema;
+// };
 
 #endif /* userprog/syscall.h */

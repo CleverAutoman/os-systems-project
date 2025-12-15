@@ -3,6 +3,8 @@
 #include <inttypes.h>
 #include <round.h>
 #include <stdio.h>
+#include <stdbool.h>
+#include <list.h>
 #include "devices/pit.h"
 #include "threads/interrupt.h"
 #include "threads/synch.h"
@@ -24,6 +26,9 @@ static int64_t ticks;
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
 
+/* Efficient time clock */
+static struct list waiting_thread;
+
 static intr_handler_func timer_interrupt;
 static bool too_many_loops(unsigned loops);
 static void busy_wait(int64_t loops);
@@ -35,6 +40,9 @@ static void real_time_delay(int64_t num, int32_t denom);
 void timer_init(void) {
   pit_configure_channel(0, 2, TIMER_FREQ);
   intr_register_ext(0x20, timer_interrupt, "8254 Timer");
+
+  /* Init for Efficient time clock */
+  list_init(&waiting_thread);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -73,14 +81,27 @@ int64_t timer_ticks(void) {
    should be a value once returned by timer_ticks(). */
 int64_t timer_elapsed(int64_t then) { return timer_ticks() - then; }
 
+bool thread_tick_cmp(const struct list_elem* a, const struct list_elem* b, void* aux UNUSED) {
+  const struct thread* ta = list_entry(a, struct thread, sleep_elem);
+  const struct thread* tb = list_entry(b, struct thread, sleep_elem);
+  return ta->wakeup_tick < tb->wakeup_tick;
+}
+
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
-void timer_sleep(int64_t ticks) {
-  int64_t start = timer_ticks();
+void timer_sleep(int64_t ticks_) {
+  if (ticks < 0)
+    return;
 
   ASSERT(intr_get_level() == INTR_ON);
-  while (timer_elapsed(start) < ticks)
-    thread_yield();
+
+  enum intr_level old = intr_disable();
+  struct thread* cur_t = thread_current();
+  cur_t->wakeup_tick = timer_ticks() + ticks_;
+
+  list_insert_ordered(&waiting_thread, &cur_t->sleep_elem, thread_tick_cmp, NULL);
+  thread_block();
+  intr_set_level(old);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -128,6 +149,23 @@ void timer_print_stats(void) { printf("Timer: %" PRId64 " ticks\n", timer_ticks(
 /* Timer interrupt handler. */
 static void timer_interrupt(struct intr_frame* args UNUSED) {
   ticks++;
+
+  while (!list_empty(&waiting_thread)) {
+    struct list_elem* front = list_front(&waiting_thread);
+    if (!front) {
+      break;
+    }
+    struct thread* t = list_entry(front, struct thread, sleep_elem);
+    if (t->wakeup_tick <= ticks) {
+      list_pop_front(&waiting_thread);
+
+      enum intr_level old = intr_disable();
+      thread_unblock(t);
+      intr_set_level(old);
+    } else {
+      break;
+    }
+  }
   thread_tick();
 }
 
