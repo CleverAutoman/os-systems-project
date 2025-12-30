@@ -73,6 +73,8 @@ bool sys_sema_up(char* sema);
 
 tid_t get_tid(void);
 
+uint32_t sys_inumber(int fd);
+
 /* Pthread SYNCH */
 
 // struct lock_t {

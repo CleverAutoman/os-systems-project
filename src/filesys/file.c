@@ -65,7 +65,7 @@ struct inode* file_get_inode(struct file* file) {
    which may be less than SIZE if end of file is reached.
    Advances FILE's position by the number of bytes read. */
 off_t file_read(struct file* file, void* buffer, off_t size) {
-  off_t bytes_read = inode_read_at(file->inode, buffer, size, file->pos);
+  off_t bytes_read = inode_read_at(file->inode, buffer, size, file->pos, true);
   file->pos += bytes_read;
   return bytes_read;
 }
@@ -76,7 +76,7 @@ off_t file_read(struct file* file, void* buffer, off_t size) {
    which may be less than SIZE if end of file is reached.
    The file's current position is unaffected. */
 off_t file_read_at(struct file* file, void* buffer, off_t size, off_t file_ofs) {
-  return inode_read_at(file->inode, buffer, size, file_ofs);
+  return inode_read_at(file->inode, buffer, size, file_ofs, true);
 }
 
 /* Writes SIZE bytes from BUFFER into FILE,
@@ -87,10 +87,14 @@ off_t file_read_at(struct file* file, void* buffer, off_t size, off_t file_ofs) 
    not yet implemented.)
    Advances FILE's position by the number of bytes read. */
 off_t file_write(struct file* file, const void* buffer, off_t size) {
+  /* TODO supoort file enlargin when reach EOF */
   if (file->deny_write)
     return 0;
-  off_t bytes_written = inode_write_at(file->inode, buffer, size, file->pos);
+  // printf("pos beofre written: %lu\n", file->pos);
+  off_t bytes_written = inode_write_at(file->inode, buffer, size, file->pos, true);
+  // printf("size: %lu, bytes written: %lu\n", size, bytes_written);
   file->pos += bytes_written;
+  // printf("pos after written: %lu\n", file->pos);
   return bytes_written;
 }
 
@@ -102,7 +106,7 @@ off_t file_write(struct file* file, const void* buffer, off_t size) {
    not yet implemented.)
    The file's current position is unaffected. */
 off_t file_write_at(struct file* file, const void* buffer, off_t size, off_t file_ofs) {
-  return inode_write_at(file->inode, buffer, size, file_ofs);
+  return inode_write_at(file->inode, buffer, size, file_ofs, true);
 }
 
 /* Prevents write operations on FILE's underlying inode
@@ -135,6 +139,9 @@ off_t file_length(struct file* file) {
 /* Sets the current position in FILE to NEW_POS bytes from the
    start of the file. */
 void file_seek(struct file* file, off_t new_pos) {
+  /*  TODO: Need to support thte conditon: pos > file_size 
+      Do nothing until write happens -> mark as all-zero blocks
+  */
   ASSERT(file != NULL);
   ASSERT(new_pos >= 0);
   file->pos = new_pos;

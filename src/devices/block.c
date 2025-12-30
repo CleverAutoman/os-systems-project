@@ -95,6 +95,7 @@ static void check_sector(struct block* block, block_sector_t sector) {
    Internally synchronizes accesses to block devices, so external
    per-block device locking is unneeded. */
 void block_read(struct block* block, block_sector_t sector, void* buffer) {
+  // printf("sector: %d\n", sector);
   check_sector(block, sector);
   block->ops->read(block->aux, sector, buffer);
   block->read_cnt++;

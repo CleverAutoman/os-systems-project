@@ -7,6 +7,7 @@
 
 static struct file* free_map_file; /* Free map file. */
 static struct bitmap* free_map;    /* Free map, one bit per sector. */
+bool free_map_ready;
 
 /* Initializes the free map. */
 void free_map_init(void) {
@@ -22,12 +23,25 @@ void free_map_init(void) {
    Returns true if successful, false if not enough consecutive
    sectors were available or if the free_map file could not be
    written. */
+
+/* Only write bitmap to bitmap file after free-map is ready */
 bool free_map_allocate(size_t cnt, block_sector_t* sectorp) {
   block_sector_t sector = bitmap_scan_and_flip(free_map, 0, cnt, false);
-  if (sector != BITMAP_ERROR && free_map_file != NULL && !bitmap_write(free_map, free_map_file)) {
-    bitmap_set_multiple(free_map, sector, cnt, false);
-    sector = BITMAP_ERROR;
+  if (sector != BITMAP_ERROR && free_map_file != NULL) {
+    bool ok = true;
+    if (free_map_ready) {
+      ok = bitmap_write(free_map, free_map_file);
+    }
+    printf("finished bitmap write\n");
+    if (!ok) {
+      bitmap_set_multiple(free_map, sector, cnt, false);
+      sector = BITMAP_ERROR;
+    }
   }
+  // if (sector != BITMAP_ERROR && free_map_file != NULL && !bitmap_write(free_map, free_map_file)) {
+  //   bitmap_set_multiple(free_map, sector, cnt, false);
+  //   sector = BITMAP_ERROR;
+  // }
   if (sector != BITMAP_ERROR)
     *sectorp = sector;
   return sector != BITMAP_ERROR;
@@ -41,7 +55,10 @@ void free_map_release(block_sector_t sector, size_t cnt) {
 }
 
 /* Opens the free map file and reads it from disk. */
-void free_map_open(void) {
+bool free_map_open(void) {
+  /* Only write freemap to disk when do_format is done */
+  free_map_ready = true;
+
   free_map_file = file_open(inode_open(FREE_MAP_SECTOR));
   if (free_map_file == NULL)
     PANIC("can't open free map");
@@ -57,7 +74,9 @@ void free_map_close(void) { file_close(free_map_file); }
 void free_map_create(void) {
   /* Create inode. */
   if (!inode_create(FREE_MAP_SECTOR, bitmap_file_size(free_map)))
+    // if (!inode_create_with_zero_first(FREE_MAP_SECTOR))
     PANIC("free map creation failed");
+  free_map_ready = true;
 
   /* Write bitmap to file. */
   free_map_file = file_open(inode_open(FREE_MAP_SECTOR));

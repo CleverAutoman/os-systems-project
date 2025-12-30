@@ -8,7 +8,7 @@
 void free_map_init(void);
 void free_map_read(void);
 void free_map_create(void);
-void free_map_open(void);
+bool free_map_open(void);
 void free_map_close(void);
 
 bool free_map_allocate(size_t, block_sector_t*);

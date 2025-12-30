@@ -81,6 +81,7 @@ pid_t exec(const char* file) { return (pid_t)syscall1(SYS_EXEC, file); }
 int wait(pid_t pid) { return syscall1(SYS_WAIT, pid); }
 
 bool create(const char* file, unsigned initial_size) {
+  // printf("user create: file: %p, size: %u\n", file, initial_size);
   return syscall2(SYS_CREATE, file, initial_size);
 }
 

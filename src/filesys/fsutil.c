@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ustar.h>
+#include "filesys/buffer-cache.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -89,7 +90,11 @@ void fsutil_extract(char** argv UNUSED) {
     int size;
 
     /* Read and parse ustar header. */
-    block_read(src, sector++, header);
+    struct cache_entry* ce_header = cache_acquire(sector++);
+    cache_read_ptr(ce_header);
+    memcpy(header, ce_header->data, sizeof(ce_header->data));
+    cache_release(ce_header);
+    // block_read(src, sector++, header);
     error = ustar_parse_header(header, &file_name, &type, &size);
     if (error != NULL)
       PANIC("bad ustar header in sector %" PRDSNu " (%s)", sector - 1, error);
@@ -107,14 +112,20 @@ void fsutil_extract(char** argv UNUSED) {
       /* Create destination file. */
       if (!filesys_create(file_name, size))
         PANIC("%s: create failed", file_name);
+      printf("create success\n");
       dst = filesys_open(file_name);
       if (dst == NULL)
         PANIC("%s: open failed", file_name);
 
+      printf("arrived here\n");
       /* Do copy. */
       while (size > 0) {
         int chunk_size = (size > BLOCK_SECTOR_SIZE ? BLOCK_SECTOR_SIZE : size);
-        block_read(src, sector++, data);
+        struct cache_entry* ce = cache_acquire(sector++);
+        cache_read_ptr(ce);
+        memcpy(data, ce->data, sizeof(ce->data));
+        cache_release(ce);
+        // block_read(src, sector++, data);
         if (file_write(dst, data, chunk_size) != chunk_size)
           PANIC("%s: write failed with %d bytes unwritten", file_name, size);
         size -= chunk_size;
@@ -131,8 +142,14 @@ void fsutil_extract(char** argv UNUSED) {
      end-of-archive marker. */
   printf("Erasing ustar archive...\n");
   memset(header, 0, BLOCK_SECTOR_SIZE);
-  block_write(src, 0, header);
-  block_write(src, 1, header);
+  struct cache_entry* ce = cache_acquire(0);
+  cache_write(ce, header, BLOCK_SECTOR_SIZE);
+  cache_release(ce);
+  ce = cache_acquire(1);
+  cache_write(ce, header, BLOCK_SECTOR_SIZE);
+  cache_release(ce);
+  // block_write(src, 0, header);
+  // block_write(src, 1, header);
 
   free(data);
   free(header);
@@ -176,6 +193,9 @@ void fsutil_append(char** argv) {
   /* Write ustar header to first sector. */
   if (!ustar_make_header(file_name, USTAR_REGULAR, size, buffer))
     PANIC("%s: name too long for ustar format", file_name);
+  struct cache_entry* ce = cache_acquire(sector++);
+  // cache_write(ce, &zeros, BLOCK_SECTOR_SIZE);
+  cache_release(ce);
   block_write(dst, sector++, buffer);
 
   /* Do copy. */
