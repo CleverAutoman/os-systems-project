@@ -10,6 +10,21 @@
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
 
+#define DIRECT_INDEX_BOUND 12
+#define INDIRECT_INDEX_BOUND (DIRECT_INDEX_BOUND + 128) // 128 = sizeof(block) / sizeof(uint32_t)
+#define DOUBLY_INDEX_BOUND                                                                         \
+  (INDIRECT_INDEX_BOUND + 128 * 128) // 128 = sizeof(block) / sizeof(uint32_t)
+
+#define DIRECT_INDEX_BOUND_BYTE (DIRECT_INDEX_BOUND * 512)
+#define INDIRECT_INDEX_BOUND_BYTE (INDIRECT_INDEX_BOUND * 512)
+#define DOUBLY_INDEX_BOUND_BYTE (DOUBLY_INDEX_BOUND * 512)
+
+/* 
+    0 -> 11: direct index;
+    12 -> 139: indirect index;
+    140 -> : doubly-indirect index;
+*/
+
 /* On-disk inode.
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
 struct inode_disk {

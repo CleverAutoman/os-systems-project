@@ -37,10 +37,16 @@ void filesys_done(void) { free_map_close(); }
    Fails if a file named NAME already exists,
    or if internal memory allocation fails. */
 bool filesys_create(const char* name, off_t initial_size) {
+  // printf("filesys create with size == %d\n", initial_size);
   block_sector_t inode_sector = 0;
   struct dir* dir = dir_open_root();
   bool success = (dir != NULL && free_map_allocate(1, &inode_sector) &&
-                  inode_create(inode_sector, initial_size) && dir_add(dir, name, inode_sector));
+                  inode_create(inode_sector, initial_size));
+  bool dir_add_success = dir_add(dir, name, inode_sector);
+  // printf("dir add success: %d\n", dir_add_success);
+  success = success && dir_add_success;
+
+  // printf("filesys create result: %d\n", success);
   if (!success && inode_sector != 0)
     free_map_release(inode_sector, 1);
   dir_close(dir);
@@ -85,7 +91,7 @@ bool filesys_remove(const char* name) {
 static void do_format(void) {
   printf("Formatting file system...");
   free_map_create();
-  if (!dir_create(ROOT_DIR_SECTOR, 16))
+  if (!dir_create(ROOT_DIR_SECTOR, 500))
     PANIC("root directory creation failed");
   free_map_close();
   printf("done.\n");
