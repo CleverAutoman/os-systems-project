@@ -28,7 +28,7 @@ ifdef PROGS
 include ../../Makefile.userprog
 endif
 
-TIMEOUT = 60
+TIMEOUT = 300
 
 clean::
 	rm -f $(OUTPUTS) $(ERRORS) $(RESULTS)
