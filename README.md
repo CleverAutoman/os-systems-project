@@ -1,10 +1,10 @@
-# Operating System Project (Pintos-based)
+# Operating System Project
 
 ## Overview
 
 > For a Chinese version of this document, see README.zh-CN.md
 
-This project extends the Pintos teaching OS with three major subsystems:
+This project extends the Pintos OS skeleton with three major subsystems:
 **user programs (processes & syscalls)**, **thread scheduling and synchronization**,
 and a **file system redesign** (FFS-style layout + Clock/Second-Chance buffer cache).
 The primary focus is correctness under concurrency, robust resource cleanup,
