@@ -75,14 +75,33 @@ and added a **buffer cache** using the **Second-Chance Clock** eviction algorith
 - Supports files up to approximately **8 MB** (512-byte blocks).
 - Added **lazy allocation / lazy loading** for sparse file growth to reduce I/O.
 
-**Performance (TODO – measured values to be filled):**
-- Microbenchmark A: `100B file × 200 loops`  
-  - baseline: `[____] ticks` → FFS: `[____] ticks` (**[____]% improvement**)
-- Microbenchmark B: `50B file × 400 loops`  
-  - baseline: `[____] ticks` → FFS: `[____] ticks` (**[____]% improvement**)
 
-> These benchmarks target metadata-heavy and small-file workloads,
-> where FFS-style layouts are most effective.
+##### **Performance:**
+
+**Sequential create + sequential read:**
+
+- Microbenchmark A: `100B file × 200 loops`
+  - baseline (FAT): **2183 ticks** → FFS: **980 ticks**  
+    (**55.1% improvement**, **2.23× speedup**)
+
+- Microbenchmark B: `50B file × 400 loops`
+  - baseline (FAT): **4736 ticks** → FFS: **3040 ticks**  
+    (**35.8% improvement**, **1.56× speedup**)
+
+**Sequential create + random directory read (directory-locality stress):**
+
+- Microbenchmark A: `100B file × 200 loops`
+  - baseline (FAT): **3364 ticks** → FFS: **963 ticks**  
+    (**71.4% improvement**, **3.49× speedup**)
+
+- Microbenchmark B: `50B file × 400 loops`
+  - baseline (FAT): **7472 ticks** → FFS: **1988 ticks**  
+    (**73.4% improvement**, **3.76× speedup**)
+
+**Result Summary:**
+> 1. **FFS consistently outperforms FAT on small-file workloads:** In sequential create + read microbenchmarks, FFS achieves up to **2.23× speedup** (100B × 200), and **1.56× speedup** (50B × 400), demonstrating clear benefits under simple access patterns.
+2. **The performance gap widens significantly under directory-level random access:**  When randomly accessing multiple small files within the same directory, FFS reaches up to **3.76× speedup**, substantially larger than in sequential cases. Also this test exposes the core weakness of FAT-style designs, which improves **3.49× speedup** under same total bytes read.
+3. 
 
 #### Buffer Cache (Second-Chance Clock)
 - Implemented a block buffer cache with **Second-Chance Clock** replacement.
