@@ -2,4 +2,4 @@
 
 #define TEST_SIZE 50
 #define LOOP_SIZE 400
-#include "tests/filesys/create_many_random_read.inc"
+#include "tests/filesys/create_many.inc"
