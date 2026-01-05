@@ -131,6 +131,7 @@ pid_t process_execute(const char* file_name) {
     free(file_name_);
     free(cp);
     free(e_aux);
+    printf("exit 1\n");
     return -1;
   }
   cp->tid = tid;
@@ -141,6 +142,7 @@ pid_t process_execute(const char* file_name) {
     free(file_name_);
     free(e_aux);
     free(cp);
+    printf("exit 2\n");
     return -1;
   }
 
@@ -247,6 +249,7 @@ static void start_process(void* aux) {
       cp->load_ok = false;
       sema_up(&cp->load_sema);
       thread_current()->exit_status = -1;
+      printf("load file failed\n");
       process_exit();
     }
     // success = load(file_name, &if_.eip, &if_.esp);
@@ -977,12 +980,16 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
   for (i = 0; i < ehdr.e_phnum; i++) {
     struct Elf32_Phdr phdr;
 
-    if (file_ofs < 0 || file_ofs > file_length(file))
+    if (file_ofs < 0 || file_ofs > file_length(file)) {
+      printf("file offset reached\n");
       goto done;
+    }
     file_seek(file, file_ofs);
 
-    if (file_read(file, &phdr, sizeof phdr) != sizeof phdr)
+    if (file_read(file, &phdr, sizeof phdr) != sizeof phdr) {
+      printf("file read failed\n");
       goto done;
+    }
     file_ofs += sizeof phdr;
     switch (phdr.p_type) {
       case PT_NULL:
@@ -1014,8 +1021,10 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
             read_bytes = 0;
             zero_bytes = ROUND_UP(page_offset + phdr.p_memsz, PGSIZE);
           }
-          if (!load_segment(file, file_page, (void*)mem_page, read_bytes, zero_bytes, writable))
+          if (!load_segment(file, file_page, (void*)mem_page, read_bytes, zero_bytes, writable)) {
+            printf("load seg failed\n");
             goto done;
+          }
         } else
           goto done;
         break;
@@ -1023,12 +1032,15 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
   }
 
   /* Set up stack. */
-  if (!setup_stack(esp))
+  if (!setup_stack(esp)) {
+    printf("setup stack failed\n");
     goto done;
+  }
 
   /* Start address. */
   *eip = (void (*)(void))ehdr.e_entry;
 
+  // printf("load success\n");
   success = true;
 
 done:
@@ -1116,6 +1128,7 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
     /* Calculate how to fill this page.
          We will read PAGE_READ_BYTES bytes from FILE
          and zero the final PAGE_ZERO_BYTES bytes. */
+    // printf("read bytes: %u, zero_bytes: %u\n", read_bytes, zero_bytes);
     size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
     size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
@@ -1125,7 +1138,10 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
       return false;
 
     /* Load this page. */
-    if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes) {
+    off_t file_read_bytes = file_read(file, kpage, page_read_bytes);
+    // printf("the result of fil read: %lu, page_read_bytes: %lu\n", file_read_bytes, page_read_bytes);
+    if (file_read_bytes != (int)page_read_bytes) {
+      printf("file read failed\n");
       palloc_free_page(kpage);
       return false;
     }
@@ -1142,6 +1158,7 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
     zero_bytes -= page_zero_bytes;
     upage += PGSIZE;
   }
+  // printf("load segment success\n");
   return true;
 }
 

@@ -82,7 +82,6 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
    */
 
   // printf("System call number: %d, with thread: %d\n", args[0], thread_current()->tid);
-  // printf("continueds;\n");
   switch (args[0]) {
     // File Operations
     case SYS_CREATE: {
@@ -352,6 +351,15 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       f->eax = get_tid();
       break;
     }
+    case SYS_INUMBER: {
+      if (!is_valid_user_range(args, 2 * sizeof(int))) {
+        thread_current()->exit_status = -1;
+        process_exit();
+      }
+      const int fd = (int)(args[1]);
+      f->eax = sys_inumber(fd);
+      break;
+    }
 
     default:
       // printf("Unknown Syscall: %d\n", args[0]);
@@ -441,7 +449,8 @@ bool create(const char* file, unsigned initial_size) {
   lock_acquire(&filesys_lock);
   bool res = filesys_create(file, initial_size);
   lock_release(&filesys_lock);
-
+  // printf("create with size = %u\n" );
+  // printf("create with size = %u\n" );
   return res;
 }
 
@@ -672,3 +681,20 @@ bool sys_sema_down(char* sema) { return sema_down_t(sema); }
 bool sys_sema_up(char* sema) { return sema_up_t(sema); }
 
 tid_t get_tid(void) { return thread_current()->tid; }
+
+/* File system Operations */
+uint32_t sys_inumber(int fd) {
+  /* Find file based on fd */
+  fdtable* fdt = cur_fdt();
+  struct file* f = NULL;
+  lock_acquire(&fdt->lock);
+  f = get_file_unlocked(fd, fdt);
+  lock_release(&fdt->lock);
+
+  /* Get inode->inumber */
+  struct inode* inode = file_get_inode(f);
+  if (!inode) {
+    return -1;
+  }
+  return inode_get_inumber(inode);
+}
