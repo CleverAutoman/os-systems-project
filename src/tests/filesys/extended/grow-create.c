@@ -1,5 +1,5 @@
 /* Create a file of size 0. */
 
-#define TEST_SIZE 10
-#define LOOP_SIZE 1000
-#include "tests/filesys/create_many.inc"
+#define TEST_SIZE 50
+#define LOOP_SIZE 400
+#include "tests/filesys/create_many_random_read.inc"
