@@ -100,8 +100,8 @@ and added a **buffer cache** using the **Second-Chance Clock** eviction algorith
 
 **Result Summary:**
 > 1. **FFS consistently outperforms FAT on small-file workloads:** In sequential create + read microbenchmarks, FFS achieves up to **2.23× speedup** (100B × 200), and **1.56× speedup** (50B × 400), demonstrating clear benefits under simple access patterns.
-2. **The performance gap widens significantly under directory-level random access:**  When randomly accessing multiple small files within the same directory, FFS reaches up to **3.76× speedup**, substantially larger than in sequential cases. Also this test exposes the core weakness of FAT-style designs, which improves **3.49× speedup** under same total bytes read.
-3. 
+> 2. **The performance gap widens significantly under directory-level random access:**  When randomly accessing multiple small files within the same directory, FFS reaches up to **3.76× speedup**, substantially larger than in sequential cases. Also this test exposes the core weakness of FAT-style designs, which improves **3.49× speedup** under same total bytes read.
+> 3. 
 
 #### Buffer Cache (Second-Chance Clock)
 - Implemented a block buffer cache with **Second-Chance Clock** replacement.
