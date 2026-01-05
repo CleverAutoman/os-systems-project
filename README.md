@@ -100,7 +100,7 @@ and added a **buffer cache** using the **Second-Chance Clock** eviction algorith
 
 **Result Summary:**
 > 1. **FFS consistently outperforms FAT across both sequential and random read workloads.**  
-   Under all evaluated scenarios—sequential create + read and random directory-level read—FFS demonstrates clear performance advantages over FAT, achieving speedups ranging from **2.23× to 3.76×**.
+   Under all evaluated scenarios, FFS demonstrates clear performance advantages over FAT, achieving speedups ranging from **2.23× to 3.76×**.
 
 > 2. **FFS performs significantly better on small-file access patterns.**  
    For tiny files (50B), FFS achieves substantial gains over bigger files (100B) in both sequential and random access, indicating more efficient handling of small-file metadata.
