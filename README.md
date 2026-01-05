@@ -85,8 +85,8 @@ and added a **buffer cache** using the **Second-Chance Clock** eviction algorith
     (**55.1% improvement**, **2.23× speedup**)
 
 - Microbenchmark B: `50B file × 400 loops`
-  - baseline (FAT): **4736 ticks** → FFS: **3040 ticks**  
-    (**35.8% improvement**, **1.56× speedup**)
+  - baseline (FAT): **7736 ticks** → FFS: **3040 ticks**  
+    (**60.7% improvement**, **2.54× speedup**)
 
 **Sequential create + random directory read (directory-locality stress):**
 
@@ -99,9 +99,15 @@ and added a **buffer cache** using the **Second-Chance Clock** eviction algorith
     (**73.4% improvement**, **3.76× speedup**)
 
 **Result Summary:**
-> 1. **FFS consistently outperforms FAT on small-file workloads:** In sequential create + read microbenchmarks, FFS achieves up to **2.23× speedup** (100B × 200), and **1.56× speedup** (50B × 400), demonstrating clear benefits under simple access patterns.
-> 2. **The performance gap widens significantly under directory-level random access:**  When randomly accessing multiple small files within the same directory, FFS reaches up to **3.76× speedup**, substantially larger than in sequential cases. Also this test exposes the core weakness of FAT-style designs, which improves **3.49× speedup** under same total bytes read.
-> 3. 
+> 1. **FFS consistently outperforms FAT across both sequential and random read workloads.**  
+   Under all evaluated scenarios—sequential create + read and random directory-level read—FFS demonstrates clear performance advantages over FAT, achieving speedups ranging from **2.23× to 3.76×**.
+
+> 2. **FFS performs significantly better on small-file access patterns.**  
+   For tiny files (50B), FFS achieves substantial gains over bigger files (100B) in both sequential and random access, indicating more efficient handling of small-file metadata.
+
+> 3. **Small-file randomly access yields the largest overall filesystem speedup.**  
+   When multiple small files are accessed in a non-sequential order, which is similar to a common real-world workload, FFS shows the greatest performance improvements (up to **3.76×**), highlighting its strength in directory-level locality and metadata organization.
+
 
 #### Buffer Cache (Second-Chance Clock)
 - Implemented a block buffer cache with **Second-Chance Clock** replacement.
