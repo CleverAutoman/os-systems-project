@@ -85,7 +85,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
   switch (args[0]) {
     // File Operations
     case SYS_CREATE: {
-      // printf("entered create\n");
+      printf("entered create\n");
       if (!is_valid_str(args[1])) {
         thread_current()->exit_status = -1;
         process_exit();
@@ -97,6 +97,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       const char* file = (const char*)(args[1]);
       unsigned initial_size = (unsigned)(args[2]);
       f->eax = create(file, initial_size);
+      printf("create result: %d\n", f->eax);
       break;
     }
     case SYS_REMOVE: {

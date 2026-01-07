@@ -5,6 +5,7 @@
 #include <string.h>
 #include "filesys/filesys.h"
 #include "filesys/free-map.h"
+#include "filesys/buffer-cache.h"
 #include "threads/malloc.h"
 
 /* Identifies an inode. */
@@ -114,7 +115,12 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos, int* 
         return NO_SECTOR;
       } else {
         allocate_free_data_block(&inode->data.direct[db_id]);
-        block_write(fs_device, inode->sector, &inode->data);
+        printf("allocate id: %u, val: %u\n", db_id, inode->data.direct[db_id]);
+
+        struct cache_entry* ce1 = acquire_entry(fs_device, inode->sector);
+        write_entry(ce1, &inode->data);
+        release_entry(ce1);
+        // block_write(fs_device, inode->sector, &inode->data);
         b_id = inode->data.direct[db_id];
       }
     }
@@ -126,16 +132,24 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos, int* 
     /* 1. If indirect is no_sector && is_read, return secotr not found 
           else create new indirect block 
     */
-    block_sector_t* bounce = calloc(BLOCK_SECTOR_SIZE, 1);
+    // block_sector_t* bounce = calloc(BLOCK_SECTOR_SIZE, 1);
+    uint32_t* bounce = NULL;
     if (inode->data.indirect == NO_SECTOR) {
       if (is_read) {
         return NO_SECTOR;
       } else {
         allocate_free_index_block(&inode->data.indirect);
-        block_write(fs_device, inode->sector, &inode->data);
+        printf("allocate indirect: %u\n", inode->data.indirect);
+
+        struct cache_entry* ce1 = acquire_entry(fs_device, inode->sector);
+        write_entry(ce1, &inode->data);
+        release_entry(ce1);
+        // block_write(fs_device, inode->sector, &inode->data);
       }
     }
-    block_read(fs_device, inode->data.indirect, bounce); // bounce is indirect table
+    struct cache_entry* ce2 = acquire_entry(fs_device, inode->data.indirect);
+    bounce = ce2->data;
+    // block_read(fs_device, inode->data.indirect, bounce); // bounce is indirect table
     pos -= DIRECT_INDEX_BOUND_BYTE;
 
     /* 2. Find id of actual data block */
@@ -151,41 +165,46 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos, int* 
     /* 3. If b_id is not allocated & is not read, create new one */
     if (bounce[db_id] == NO_SECTOR) {
       if (is_read) {
-        // cache_release(ce);
+        release_entry(ce2);
         return NO_SECTOR;
       } else {
         /* Create new data block and link to direct block */
-        // printf("indirect has no_sector\n");
         allocate_free_data_block(&bounce[db_id]);
-        block_write(fs_device, inode->data.indirect, bounce);
-        // cache_write(ce, bounce, BLOCK_SECTOR_SIZE);
+        printf("allocate id: %u, val: %u\n", db_id, bounce[db_id]);
+        write_entry(ce2, bounce);
+        // block_write(fs_device, inode->data.indirect, bounce);
       }
     }
     b_id = bounce[db_id];
-    // block_read(fs_device, bounce[db_id], bounce);
+    release_entry(ce2);
 
     // cache_release(ce);
-    // printf("bid: %lu, block #: %d, from indirect llist\n", b_id, db_id);
-    if (bounce) {
-      free(bounce);
-    }
-
+    // if (bounce) {
+    //   free(bounce);
+    // }
+    printf("bid: %d, dbid: %d, from indirect llist\n", b_id, db_id);
   } else if (pos < DOUBLY_INDEX_BOUND_BYTE) {
     /* Pos is in doubly indirect index range */
 
     /* 1. If indirect is no_sector && is_read, return secotr not found 
           else create new indirect block 
     */
-    block_sector_t* bounce = calloc(BLOCK_SECTOR_SIZE, 1);
+    // block_sector_t* bounce = calloc(BLOCK_SECTOR_SIZE, 1);
+    uint32_t* bounce = NULL;
     if (inode->data.doubly_indirect == NO_SECTOR) {
       if (is_read) {
         return NO_SECTOR;
       } else {
         allocate_free_index_block(&inode->data.doubly_indirect);
-        block_write(fs_device, inode->sector, &inode->data);
+        // block_write(fs_device, inode->sector, &inode->data);
+        struct cache_entry* ce1 = acquire_entry(fs_device, inode->sector);
+        write_entry(ce1, &inode->data);
+        release_entry(ce1);
       }
     }
-    block_read(fs_device, inode->data.doubly_indirect, bounce); // first block
+    // block_read(fs_device, inode->data.doubly_indirect, bounce); // first block
+    struct cache_entry* ce2 = acquire_entry(fs_device, inode->data.doubly_indirect);
+    bounce = ce2->data;
     pos -= INDIRECT_INDEX_BOUND_BYTE;
 
     // ce = cache_acquire(inode->data.doubly_indirect);
@@ -200,17 +219,22 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos, int* 
     /* If doubly_indirect is no_sector, allocate new one */
     if (i2_id == NO_SECTOR) {
       if (is_read) {
-        // cache_release(ce);
+        release_entry(ce2);
         return NO_SECTOR;
       } else {
         /* Create new data block and link to direct block */
         allocate_free_index_block(&bounce[i1_id]);
         i2_id = bounce[i1_id];
-        block_write(fs_device, inode->data.doubly_indirect, bounce); // write back first block
+        // block_write(fs_device, inode->data.doubly_indirect, bounce); // write back first block
+        write_entry(ce2, bounce);
         // cache_write(ce, bounce, BLOCK_SECTOR_SIZE);
       }
     }
-    block_read(fs_device, i2_id, bounce); // second block
+    release_entry(ce2);
+
+    struct cache_entry* ce3 = acquire_entry(fs_device, i2_id);
+    bounce = ce3->data;
+    // block_read(fs_device, i2_id, bounce); // second block
 
     // cache_release(ce);
 
@@ -224,22 +248,26 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos, int* 
 
     if (bounce[db_id] == NO_SECTOR) {
       if (is_read) {
-        // cache_release(ce);
+        release_entry(ce3);
         return NO_SECTOR;
       } else {
         /* Create new data block and link to direct block */
         allocate_free_data_block(&bounce[db_id]);
-        block_write(fs_device, i2_id, bounce);
+        write_entry(ce3, bounce);
+
+        // block_write(fs_device, i2_id, bounce);
         // cache_write(ce, bounce, BLOCK_SECTOR_SIZE);
       }
     }
     b_id = bounce[db_id];
+    release_entry(ce3);
+
     // printf("bid: %d, dbid: %d, from doulbuy llist\n", b_id, db_id);
     // cache_release(ce);
 
-    if (bounce) {
-      free(bounce);
-    }
+    // if (bounce) {
+    //   free(bounce);
+    // }
   } else {
     printf("file size limit reached\n");
   }
@@ -527,7 +555,7 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
     if (sector_idx == NO_SECTOR) {
       break;
     }
-    // printf("byte to sectot success with sector_idx: %u\n", sector_idx);
+    printf("byte to sectot success with sector_idx: %u\n", sector_idx);
     int chunk_size = BLOCK_SECTOR_SIZE - sector_ofs;
     chunk_size = chunk_size < size ? chunk_size : size;
 

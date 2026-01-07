@@ -15,8 +15,8 @@ test_main (void)
 
     snprintf(file_name, sizeof file_name, "blar-%d", i);
     CHECK (create (file_name, TEST_SIZE), "create \"%s\"", file_name);
-    #if 0
+    // #if 0
     check_file (file_name, buf, TEST_SIZE);
-    #endif
+    // #endif
   }
 }
