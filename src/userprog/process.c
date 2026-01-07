@@ -979,6 +979,7 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
   file_ofs = ehdr.e_phoff;
   for (i = 0; i < ehdr.e_phnum; i++) {
     struct Elf32_Phdr phdr;
+    // printf("file offset: %lu, file length: %lu\n", file_ofs, file_length(file));
 
     if (file_ofs < 0 || file_ofs > file_length(file)) {
       printf("file offset reached\n");

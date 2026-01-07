@@ -88,10 +88,14 @@ off_t file_read_at(struct file* file, void* buffer, off_t size, off_t file_ofs) 
    not yet implemented.)
    Advances FILE's position by the number of bytes read. */
 off_t file_write(struct file* file, const void* buffer, off_t size) {
+  /* TODO supoort file enlargin when reach EOF */
   if (file->deny_write)
     return 0;
+  // printf("pos beofre written: %lu\n", file->pos);
   off_t bytes_written = inode_write_at(file->inode, buffer, size, file->pos);
+  // printf("size: %lu, bytes written: %lu\n", size, bytes_written);
   file->pos += bytes_written;
+  // printf("pos after written: %lu\n", file->pos);
   return bytes_written;
 }
 
@@ -136,6 +140,9 @@ off_t file_length(struct file* file) {
 /* Sets the current position in FILE to NEW_POS bytes from the
    start of the file. */
 void file_seek(struct file* file, off_t new_pos) {
+  /*  TODO: Need to support thte conditon: pos > file_size 
+      Do nothing until write happens -> mark as all-zero blocks
+  */
   ASSERT(file != NULL);
   ASSERT(new_pos >= 0);
   file->pos = new_pos;

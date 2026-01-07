@@ -363,6 +363,7 @@ static bool lock_refresh(struct lock* lock) {
    make sense to try to release a lock within an interrupt
    handler. */
 void lock_release(struct lock* lock) {
+  // printf("lock: %p\n", lock);
   ASSERT(lock != NULL);
   ASSERT(lock_held_by_current_thread(lock));
 

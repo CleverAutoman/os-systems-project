@@ -97,9 +97,7 @@ static void check_sector(struct block* block, block_sector_t sector) {
 
 /* Will adopt buffer cache here */
 void block_read(struct block* block, block_sector_t sector, void* buffer) {
-  /* Try to access buffer cache first before accessing block, return if success */
-
-  /* Else read from block and update buffer */
+  // printf("sector: %d\n", sector);
   check_sector(block, sector);
   block->ops->read(block->aux, sector, buffer);
   block->read_cnt++;

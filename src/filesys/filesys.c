@@ -6,6 +6,7 @@
 #include "filesys/free-map.h"
 #include "filesys/inode.h"
 #include "filesys/directory.h"
+#include "filesys/buffer-cache.h"
 
 /* Partition that contains the file system. */
 struct block* fs_device;
@@ -55,6 +56,7 @@ bool filesys_create(const char* name, off_t initial_size) {
   if (!success && inode_sector != 0)
     free_map_release(inode_sector, 1);
   dir_close(dir);
+  printf("dir close success\n");
 
   return success;
 }
@@ -70,8 +72,7 @@ struct file* filesys_open(const char* name) {
 
   if (dir != NULL) {
     bool ok = dir_lookup(dir, name, &inode);
-    // printf("DEBUG: dir_lookup(%s) -> %s, inode=%p\n",
-    //  name, ok ? "found" : "not found", inode);
+    // printf("open: dir: %p, name: %s, inode: %p\n", dir, name, inode);
   }
   dir_close(dir);
 

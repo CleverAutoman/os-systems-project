@@ -57,8 +57,20 @@ static bool is_valid_str(const void* ptr) {
   return true;
 }
 
+// static char *copy_in_string (const char *us) {
+//   char *ks = palloc_get_page(0);
+//   if (!ks) process_exit();
+
+//   for (size_t i = 0; i < PGSIZE; i++) {
+//     int b = get_user_byte((const uint8_t *)us + i);
+//     if (b < 0) process_exit();
+//     ks[i] = (char)b;
+//     if (ks[i] == '\0') return ks;
+//   }
+//   process_exit();
+// }
+
 static void syscall_handler(struct intr_frame* f UNUSED) {
-  // printf("syscall entry: eax=%d\n", (int)f->eax);
   uint32_t* args = ((uint32_t*)f->esp);
   // printf("about to read syscall num\n");
   // uint32_t num = args[0];
@@ -85,7 +97,8 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
   switch (args[0]) {
     // File Operations
     case SYS_CREATE: {
-      printf("entered create\n");
+      uint8_t* sp = f->esp;
+
       if (!is_valid_str(args[1])) {
         thread_current()->exit_status = -1;
         process_exit();
@@ -96,8 +109,9 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       }
       const char* file = (const char*)(args[1]);
       unsigned initial_size = (unsigned)(args[2]);
+      // char *kfile = copy_in_string(file);
       f->eax = create(file, initial_size);
-      printf("create result: %d\n", f->eax);
+      // printf("create success with eax: %d\n", f->eax);
       break;
     }
     case SYS_REMOVE: {
@@ -430,10 +444,7 @@ pid_t exec(const char* cmd_line) {
   return tid;
 }
 
-int wait(pid_t pid) {
-  return process_wait(pid);
-  // return 0;
-}
+int wait(pid_t pid) { return process_wait(pid); }
 
 pid_t fork(struct intr_frame* f) { return process_fork(f); }
 
@@ -441,10 +452,9 @@ pid_t fork(struct intr_frame* f) { return process_fork(f); }
  * File operations
  */
 bool create(const char* file, unsigned initial_size) {
-  // printf("current file: %s\n", file);
-  // printf("current size: %u\n", initial_size);
-
+  // printf("entered create \n");
   if (!file || file[0] == '\0') {
+    printf("exit here\n");
     return false;
   }
   lock_acquire(&filesys_lock);
@@ -457,7 +467,7 @@ bool create(const char* file, unsigned initial_size) {
 
 bool remove(const char* file) {
   if (file == NULL) {
-    return false; // 无效参数
+    return false;
   }
 
   lock_acquire(&filesys_lock);
@@ -494,6 +504,7 @@ int open(const char* file) {
 }
 
 int read(int fd, void* buffer, unsigned size) {
+  // printf("caleld here\n");
   ASSERT(buffer != NULL);
   uint8_t* input_buffer = (uint8_t*)buffer;
 
@@ -522,8 +533,10 @@ int read(int fd, void* buffer, unsigned size) {
   lock_acquire(&filesys_lock);
   int n = file_read(f, buffer, size);
   lock_release(&filesys_lock);
+
   return n;
 }
+
 int filesize(int fd) {
   fdtable* fdt = cur_fdt();
   struct file* f = NULL;
@@ -640,6 +653,7 @@ int write(int fd, const void* buffer, unsigned size) {
 }
 
 /* Pthread Operations */
+
 tid_t sys_pthread_create(stub_fun sfun, pthread_fun tfun, const void* arg) {
   // printf("pthread_create: parent=%d\n", thread_current()->tid);
 

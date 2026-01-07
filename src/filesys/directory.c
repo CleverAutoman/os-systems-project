@@ -72,6 +72,7 @@ struct inode* dir_get_inode(struct dir* dir) {
    directory entry if OFSP is non-null.
    otherwise, returns false and ignores EP and OFSP. */
 static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep, off_t* ofsp) {
+  printf("entrer lookup\n");
   struct dir_entry e;
   size_t ofs;
 
@@ -152,7 +153,9 @@ bool dir_add(struct dir* dir, const char* name, block_sector_t inode_sector) {
   e.in_use = true;
   strlcpy(e.name, name, sizeof e.name);
   e.inode_sector = inode_sector;
-  success = inode_write_at(dir->inode, &e, sizeof e, ofs) == sizeof e;
+  off_t off = inode_write_at(dir->inode, &e, sizeof e, ofs);
+  // printf("off == %d\n", off);
+  success = off == sizeof e;
 
 done:
   return success;
@@ -167,23 +170,25 @@ bool dir_remove(struct dir* dir, const char* name) {
   struct inode* inode = NULL;
   bool success = false;
   off_t ofs;
-
   ASSERT(dir != NULL);
   ASSERT(name != NULL);
 
   /* Find directory entry. */
-  if (!lookup(dir, name, &e, &ofs))
+  if (!lookup(dir, name, &e, &ofs)) {
     goto done;
+  }
 
   /* Open inode. */
   inode = inode_open(e.inode_sector);
-  if (inode == NULL)
+  if (inode == NULL) {
     goto done;
+  }
 
   /* Erase directory entry. */
   e.in_use = false;
-  if (inode_write_at(dir->inode, &e, sizeof e, ofs) != sizeof e)
+  if (inode_write_at(dir->inode, &e, sizeof e, ofs) != sizeof e) {
     goto done;
+  }
 
   /* Remove inode. */
   inode_remove(inode);

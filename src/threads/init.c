@@ -309,7 +309,7 @@ static char** parse_options(char** argv) {
 /* Runs the task specified in ARGV[1]. */
 static void run_task(char** argv) {
   const char* task = argv[1];
-
+  printf("task: %s\n", task);
   printf("Executing '%s':\n", task);
 #ifdef USERPROG
   process_wait(process_execute(task));

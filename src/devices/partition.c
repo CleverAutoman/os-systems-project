@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include "devices/block.h"
 #include "threads/malloc.h"
+#include "filesys/buffer-cache.h"
 
 /* A partition of a block device. */
 struct partition {
@@ -75,7 +76,11 @@ static void read_partition_table(struct block* block, block_sector_t sector,
   pt = malloc(sizeof *pt);
   if (pt == NULL)
     PANIC("Failed to allocate memory for partition table.");
+  // struct cache_entry *ce = cache_acquire(0);
+  // cache_read_ptr(ce);
   block_read(block, 0, pt);
+  // memcpy(pt, ce->data, sizeof(ce->data));
+  // cache_release(ce);
 
   /* Check signature. */
   if (pt->signature != 0xaa55) {
@@ -273,7 +278,11 @@ static const char* partition_type_name(uint8_t type) {
    have room for BLOCK_SECTOR_SIZE bytes. */
 static void partition_read(void* p_, block_sector_t sector, void* buffer) {
   struct partition* p = p_;
+  // struct cache_entry *ce = cache_acquire(p->start + sector);
+  // cache_read_ptr(ce);
+  // memcpy(buffer, ce->data, sizeof(ce->data));
   block_read(p->block, p->start + sector, buffer);
+  // cache_release(ce);
 }
 
 /* Write sector SECTOR to partition P from BUFFER, which must
