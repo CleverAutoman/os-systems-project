@@ -146,7 +146,7 @@ disk I/O by serving most requests directly from memory.
 
 - Process & syscalls: `fork_tree`, `multi-oom-mt`
 - User threads: `search-arr`
-- Additional correctness tests from the Pintos test suite
+- Additional correctness tests from the basic test suite
 
 ---
 
