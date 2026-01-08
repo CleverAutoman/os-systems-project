@@ -2,9 +2,7 @@
 
 ## Overview
 
-> For a Chinese version of this document, see README.zh-CN.md
-
-This project extends the Pintos OS skeleton with three major subsystems:
+This project extends the basic OS skeleton with three major subsystems:
 **user programs (processes & syscalls)**, **thread scheduling and synchronization**,
 and a **file system redesign** (FFS-style layout + Clock/Second-Chance buffer cache).
 The primary focus is correctness under concurrency, robust resource cleanup,
@@ -119,10 +117,15 @@ and added a **buffer cache** using the **Second-Chance Clock** eviction algorith
 - Used a handle-based interface to enable **kernel-level zero-copy–style access**
   and reduce unnecessary memory copying.
 
-**Performance (TODO):**
-- Cache ON vs OFF for repeated reads / metadata-heavy workloads:
-  - **[____]% latency reduction** or **[____]× throughput improvement**
-- Cache hit rate under workload X: **[____]%**
+**Performance**
+- Under a workload consisting of repeated small reads/writes to the same set of file blocks (looping 200 times over 100-byte accesses), enabling the buffer cache significantly reduced disk I/O operations by serving most requests directly from memory: 
+  - Latency reduction: **983 ticks** → **188 ticks** (approximately **80–82%**)
+  - Throughput improvement: approximately 5.0×–5.3×
+
+**Result Summary:**
+> I also evaluated the per-entry lock + `busy` condition–based design. Although this design reduces global-lock holding time and is more suitable for concurrent workloads, Pintos executes the filesystem in a **single-threaded** context. Consequently, the additional locking and condition-variable overhead outweighed its benefits, resulting in a slightly higher execution time of **203 ticks** than **188 ticks**.
+
+> Therefore, the global-lock design was chosen as the final implementation to achieve the best performance under Pintos’ execution model.
 
 ---
 
@@ -153,11 +156,3 @@ and added a **buffer cache** using the **Second-Chance Clock** eviction algorith
   (process/thread lifecycles, ownership, and cleanup).
 - Building incrementally reduces debugging complexity in OS development.
 - Fine-grained commits and continuous testing are critical for system stability.
-
----
-
-## TODO / Next Steps
-
-- Fill in measured performance numbers for FFS microbenchmarks.
-- Add cache ON/OFF benchmark results with hit rate statistics.
-- Automate benchmarks for reproducible performance evaluation.
