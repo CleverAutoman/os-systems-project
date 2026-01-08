@@ -94,6 +94,8 @@ static void check_sector(struct block* block, block_sector_t sector) {
    have room for BLOCK_SECTOR_SIZE bytes.
    Internally synchronizes accesses to block devices, so external
    per-block device locking is unneeded. */
+
+/* Will adopt buffer cache here */
 void block_read(struct block* block, block_sector_t sector, void* buffer) {
   // printf("sector: %d\n", sector);
   check_sector(block, sector);
@@ -107,6 +109,9 @@ void block_read(struct block* block, block_sector_t sector, void* buffer) {
    Internally synchronizes accesses to block devices, so external
    per-block device locking is unneeded. */
 void block_write(struct block* block, block_sector_t sector, const void* buffer) {
+  /* Write into buffer instead of block */
+
+  /* Only write into block when there is no enough space and evict current buffer */
   check_sector(block, sector);
   ASSERT(block->type != BLOCK_FOREIGN);
   block->ops->write(block->aux, sector, buffer);

@@ -22,7 +22,8 @@ struct dir_entry {
 /* Creates a directory with space for ENTRY_CNT entries in the
    given SECTOR.  Returns true if successful, false on failure. */
 bool dir_create(block_sector_t sector, size_t entry_cnt) {
-  return inode_create_with_zero_first(sector);
+  // return inode_create(sector, entry_cnt * sizeof(struct dir_entry));
+  return inode_create_with_zero_first(sector, entry_cnt * sizeof(struct dir_entry));
 }
 
 /* Opens and returns the directory for the given INODE, of which
@@ -71,14 +72,14 @@ struct inode* dir_get_inode(struct dir* dir) {
    directory entry if OFSP is non-null.
    otherwise, returns false and ignores EP and OFSP. */
 static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep, off_t* ofsp) {
-  printf("entrer lookup\n");
+  // printf("entrer lookup\n");
   struct dir_entry e;
   size_t ofs;
 
   ASSERT(dir != NULL);
   ASSERT(name != NULL);
 
-  for (ofs = 0; inode_read_at(dir->inode, &e, sizeof e, ofs, true) == sizeof e; ofs += sizeof e)
+  for (ofs = 0; inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e; ofs += sizeof e)
     if (e.in_use && !strcmp(name, e.name)) {
       if (ep != NULL)
         *ep = e;
@@ -126,12 +127,16 @@ bool dir_add(struct dir* dir, const char* name, block_sector_t inode_sector) {
   ASSERT(name != NULL);
 
   /* Check NAME for validity. */
-  if (*name == '\0' || strlen(name) > NAME_MAX)
+  if (*name == '\0' || strlen(name) > NAME_MAX) {
+    printf("Exit because of exceeded file size\n");
     return false;
+  }
 
   /* Check that NAME is not in use. */
-  if (lookup(dir, name, NULL, NULL))
+  if (lookup(dir, name, NULL, NULL)) {
+    printf("exit since found same name\n");
     goto done;
+  }
 
   /* Set OFS to offset of free slot.
      If there are no free slots, then it will be set to the
@@ -140,7 +145,7 @@ bool dir_add(struct dir* dir, const char* name, block_sector_t inode_sector) {
      inode_read_at() will only return a short read at end of file.
      Otherwise, we'd need to verify that we didn't get a short
      read due to something intermittent such as low memory. */
-  for (ofs = 0; inode_read_at(dir->inode, &e, sizeof e, ofs, true) == sizeof e; ofs += sizeof e)
+  for (ofs = 0; inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e; ofs += sizeof e)
     if (!e.in_use)
       break;
 
@@ -148,7 +153,7 @@ bool dir_add(struct dir* dir, const char* name, block_sector_t inode_sector) {
   e.in_use = true;
   strlcpy(e.name, name, sizeof e.name);
   e.inode_sector = inode_sector;
-  off_t off = inode_write_at(dir->inode, &e, sizeof e, ofs, true);
+  off_t off = inode_write_at(dir->inode, &e, sizeof e, ofs);
   // printf("off == %d\n", off);
   success = off == sizeof e;
 
@@ -181,7 +186,7 @@ bool dir_remove(struct dir* dir, const char* name) {
 
   /* Erase directory entry. */
   e.in_use = false;
-  if (inode_write_at(dir->inode, &e, sizeof e, ofs, true) != sizeof e) {
+  if (inode_write_at(dir->inode, &e, sizeof e, ofs) != sizeof e) {
     goto done;
   }
 
@@ -200,7 +205,7 @@ done:
 bool dir_readdir(struct dir* dir, char name[NAME_MAX + 1]) {
   struct dir_entry e;
 
-  while (inode_read_at(dir->inode, &e, sizeof e, dir->pos, true) == sizeof e) {
+  while (inode_read_at(dir->inode, &e, sizeof e, dir->pos) == sizeof e) {
     dir->pos += sizeof e;
     if (e.in_use) {
       strlcpy(name, e.name, NAME_MAX + 1);

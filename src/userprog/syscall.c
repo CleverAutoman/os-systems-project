@@ -94,7 +94,6 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
    */
 
   // printf("System call number: %d, with thread: %d\n", args[0], thread_current()->tid);
-  // printf("continueds;\n");
   switch (args[0]) {
     // File Operations
     case SYS_CREATE: {
@@ -461,7 +460,8 @@ bool create(const char* file, unsigned initial_size) {
   lock_acquire(&filesys_lock);
   bool res = filesys_create(file, initial_size);
   lock_release(&filesys_lock);
-  // printf("calling filesys create success with %d\n", res);
+  // printf("create with size = %u\n" );
+  // printf("create with size = %u\n" );
   return res;
 }
 

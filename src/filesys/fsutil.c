@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ustar.h>
-#include "filesys/buffer-cache.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -90,11 +89,11 @@ void fsutil_extract(char** argv UNUSED) {
     int size;
 
     /* Read and parse ustar header. */
-    struct cache_entry* ce_header = cache_acquire(sector++);
-    cache_read_ptr(ce_header);
-    memcpy(header, ce_header->data, sizeof(ce_header->data));
-    cache_release(ce_header);
-    // block_read(src, sector++, header);
+    block_read(src, sector++, header);
+    // struct cache_entry* ce1 = acquire_entry(src, sector++);
+    // read_entry(ce1, header);
+    // release_entry(ce1);
+
     error = ustar_parse_header(header, &file_name, &type, &size);
     if (error != NULL)
       PANIC("bad ustar header in sector %" PRDSNu " (%s)", sector - 1, error);
@@ -112,20 +111,19 @@ void fsutil_extract(char** argv UNUSED) {
       /* Create destination file. */
       if (!filesys_create(file_name, size))
         PANIC("%s: create failed", file_name);
-      printf("create success\n");
       dst = filesys_open(file_name);
       if (dst == NULL)
         PANIC("%s: open failed", file_name);
 
-      printf("arrived here\n");
       /* Do copy. */
       while (size > 0) {
         int chunk_size = (size > BLOCK_SECTOR_SIZE ? BLOCK_SECTOR_SIZE : size);
-        struct cache_entry* ce = cache_acquire(sector++);
-        cache_read_ptr(ce);
-        memcpy(data, ce->data, sizeof(ce->data));
-        cache_release(ce);
-        // block_read(src, sector++, data);
+
+        block_read(src, sector++, data);
+        // struct cache_entry* ce1 = acquire_entry(src, sector++);
+        // read_entry(ce1, data);
+        // release_entry(ce1);
+
         if (file_write(dst, data, chunk_size) != chunk_size)
           PANIC("%s: write failed with %d bytes unwritten", file_name, size);
         size -= chunk_size;
@@ -142,14 +140,16 @@ void fsutil_extract(char** argv UNUSED) {
      end-of-archive marker. */
   printf("Erasing ustar archive...\n");
   memset(header, 0, BLOCK_SECTOR_SIZE);
-  struct cache_entry* ce = cache_acquire(0);
-  cache_write(ce, header, BLOCK_SECTOR_SIZE);
-  cache_release(ce);
-  ce = cache_acquire(1);
-  cache_write(ce, header, BLOCK_SECTOR_SIZE);
-  cache_release(ce);
-  // block_write(src, 0, header);
-  // block_write(src, 1, header);
+
+  block_write(src, 0, header);
+  block_write(src, 1, header);
+  // struct cache_entry* ce1 = acquire_entry(src, 0);
+  // write_entry(ce1, header);
+  // release_entry(ce1);
+
+  // struct cache_entry* ce2 = acquire_entry(src, 1);
+  // write_entry(ce2, header);
+  // release_entry(ce2);
 
   free(data);
   free(header);
@@ -193,10 +193,11 @@ void fsutil_append(char** argv) {
   /* Write ustar header to first sector. */
   if (!ustar_make_header(file_name, USTAR_REGULAR, size, buffer))
     PANIC("%s: name too long for ustar format", file_name);
-  struct cache_entry* ce = cache_acquire(sector++);
-  // cache_write(ce, &zeros, BLOCK_SECTOR_SIZE);
-  cache_release(ce);
+
   block_write(dst, sector++, buffer);
+  // struct cache_entry* ce1 = acquire_entry(dst, sector++);
+  // write_entry(ce1, buffer);
+  // release_entry(ce1);
 
   /* Do copy. */
   while (size > 0) {
@@ -206,7 +207,12 @@ void fsutil_append(char** argv) {
     if (file_read(src, buffer, chunk_size) != chunk_size)
       PANIC("%s: read failed with %" PROTd " bytes unread", file_name, size);
     memset(buffer + chunk_size, 0, BLOCK_SECTOR_SIZE - chunk_size);
+
     block_write(dst, sector++, buffer);
+    // struct cache_entry* ce2 = acquire_entry(dst, sector++);
+    // write_entry(ce2, buffer);
+    // release_entry(ce2);
+
     size -= chunk_size;
   }
 
@@ -214,8 +220,16 @@ void fsutil_append(char** argv) {
      sectors full of zeros.  Don't advance our position past
      them, though, in case we have more files to append. */
   memset(buffer, 0, BLOCK_SECTOR_SIZE);
+
   block_write(dst, sector, buffer);
   block_write(dst, sector + 1, buffer);
+  // struct cache_entry* ce3 = acquire_entry(fs_device, sector);
+  // write_entry(ce3, buffer);
+  // release_entry(ce3);
+
+  // struct cache_entry* ce4 = acquire_entry(fs_device, sector + 1);
+  // write_entry(ce4, buffer);
+  // release_entry(ce4);
 
   /* Finish up. */
   file_close(src);
