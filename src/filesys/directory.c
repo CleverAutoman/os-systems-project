@@ -72,7 +72,7 @@ struct inode* dir_get_inode(struct dir* dir) {
    directory entry if OFSP is non-null.
    otherwise, returns false and ignores EP and OFSP. */
 static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep, off_t* ofsp) {
-  printf("entrer lookup\n");
+  // printf("entrer lookup\n");
   struct dir_entry e;
   size_t ofs;
 

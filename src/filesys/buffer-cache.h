@@ -52,4 +52,6 @@ struct cache_entry* release_entry(struct cache_entry*);
 void read_entry(struct cache_entry*, void*);
 void write_entry(struct cache_entry*, void*);
 
+void cache_flush_all();
+
 #endif /* filesys/buffer-cache.h */

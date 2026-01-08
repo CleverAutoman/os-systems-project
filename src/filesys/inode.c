@@ -74,15 +74,16 @@ static bool allocate_free_index_block(block_sector_t* sector_id) {
   bool success = false;
   /* Allocate block for new data */
   if (free_map_allocate(1, sector_id)) {
-    static uint32_t zeros[BLOCK_SECTOR_SIZE / 4];
+    uint32_t zeros[BLOCK_SECTOR_SIZE / 4];
     /* Write 0xFFFFFFFF into zeros */
     for (int i = 0; i < BLOCK_SECTOR_SIZE / 4; i++) {
       zeros[i] = NO_SECTOR;
     }
-    // struct cache_entry* ce = cache_acquire(*sector_id);
-    // cache_write(ce, &zeros, BLOCK_SECTOR_SIZE);
-    // cache_release(ce);
-    block_write(fs_device, *sector_id, zeros);
+    // block_write(fs_device, *sector_id, zeros);
+
+    struct cache_entry* ce1 = acquire_entry(fs_device, *sector_id);
+    write_entry(ce1, zeros);
+    release_entry(ce1);
     success = true;
   }
   return success;
@@ -92,15 +93,20 @@ static bool allocate_free_data_block(block_sector_t* sector_id) {
   bool success = false;
   /* Allocate block for new data */
   if (free_map_allocate(1, sector_id)) {
-    static uint32_t zeros[BLOCK_SECTOR_SIZE / 4];
-    // struct cache_entry* ce = cache_acquire(*sector_id);
-    // cache_write(ce, zeros, BLOCK_SECTOR_SIZE);
-    // cache_release(ce);
-    block_write(fs_device, *sector_id, zeros);
+    uint32_t zeros[BLOCK_SECTOR_SIZE / 4];
+    memset(zeros, 0, BLOCK_SECTOR_SIZE);
+
+    // block_write(fs_device, *sector_id, zeros);
+    struct cache_entry* ce1 = acquire_entry(fs_device, *sector_id);
+    write_entry(ce1, zeros);
+    release_entry(ce1);
+
     success = true;
   }
   return success;
 }
+
+static void release_free_block(block_sector_t sector) { free_map_release(sector, 1); }
 
 /* Returns the block device sector that contains byte offset POS
    within INODE.
@@ -129,9 +135,10 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos, int* 
         return NO_SECTOR;
       } else {
         allocate_free_data_block(&inode->data.direct[db_id]);
-        printf("allocate id: %u, val: %u\n", db_id, inode->data.direct[db_id]);
+        // printf("allocate id: %u, val: %u\n", db_id, inode->data.direct[db_id]);
 
         struct cache_entry* ce1 = acquire_entry(fs_device, inode->sector);
+        ASSERT(sizeof(inode->data) == BLOCK_SECTOR_SIZE);
         write_entry(ce1, &inode->data);
         release_entry(ce1);
         // block_write(fs_device, inode->sector, &inode->data);
@@ -152,15 +159,18 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos, int* 
       if (is_read) {
         return NO_SECTOR;
       } else {
+        // printf("ready to allocate1\n");
         allocate_free_index_block(&inode->data.indirect);
-        printf("allocate indirect: %u\n", inode->data.indirect);
+        // printf("allocate indirect: %u\n", inode->data.indirect);
 
         struct cache_entry* ce1 = acquire_entry(fs_device, inode->sector);
+        ASSERT(sizeof(inode->data) == BLOCK_SECTOR_SIZE);
         write_entry(ce1, &inode->data);
         release_entry(ce1);
         // block_write(fs_device, inode->sector, &inode->data);
       }
     }
+    // printf("acquire1\n");
     struct cache_entry* ce2 = acquire_entry(fs_device, inode->data.indirect);
     bounce = ce2->data;
     // block_read(fs_device, inode->data.indirect, bounce); // bounce is indirect table
@@ -179,24 +189,46 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos, int* 
     /* 3. If b_id is not allocated & is not read, create new one */
     if (bounce[db_id] == NO_SECTOR) {
       if (is_read) {
+        // printf("release1\n");
         release_entry(ce2);
         return NO_SECTOR;
       } else {
         /* Create new data block and link to direct block */
-        allocate_free_data_block(&bounce[db_id]);
-        printf("allocate id: %u, val: %u\n", db_id, bounce[db_id]);
-        write_entry(ce2, bounce);
+
+        /* Allocating free data block need to release lock, 
+          so we need to do double-check before assigning new value */
+        block_sector_t prev = bounce[db_id];
+        release_entry(ce2);
+        /* Create new data block first */
+        block_sector_t new_id;
+        allocate_free_data_block(&new_id);
+        /* Re-acquire cache entry with same indirect sector */
+        ce2 = acquire_entry(fs_device, inode->data.indirect);
+        bounce = ce2->data;
+        if (prev != bounce[db_id]) { // already occupied by other thread
+          /* Free this data block */
+          b_id = bounce[db_id];
+          release_entry(ce2);
+          /* Also no lock held before releasing data block */
+          release_free_block(new_id);
+        } else {
+          b_id = bounce[db_id] = new_id;
+          write_entry(ce2, bounce);
+          release_entry(ce2);
+        }
+        // printf("allocate id: %u, val: %u\n", db_id, bounce[db_id]);
         // block_write(fs_device, inode->data.indirect, bounce);
       }
+    } else {
+      b_id = bounce[db_id];
+      release_entry(ce2);
     }
-    b_id = bounce[db_id];
-    release_entry(ce2);
 
     // cache_release(ce);
     // if (bounce) {
     //   free(bounce);
     // }
-    printf("bid: %d, dbid: %d, from indirect llist\n", b_id, db_id);
+    // printf("bid: %d, dbid: %d, from indirect llist\n", b_id, db_id);
   } else if (pos < DOUBLY_INDEX_BOUND_BYTE) {
     /* Pos is in doubly indirect index range */
 
@@ -212,18 +244,16 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos, int* 
         allocate_free_index_block(&inode->data.doubly_indirect);
         // block_write(fs_device, inode->sector, &inode->data);
         struct cache_entry* ce1 = acquire_entry(fs_device, inode->sector);
+        ASSERT(sizeof(inode->data) == BLOCK_SECTOR_SIZE);
         write_entry(ce1, &inode->data);
         release_entry(ce1);
       }
     }
     // block_read(fs_device, inode->data.doubly_indirect, bounce); // first block
+    // printf("acquire2\n");
     struct cache_entry* ce2 = acquire_entry(fs_device, inode->data.doubly_indirect);
     bounce = ce2->data;
     pos -= INDIRECT_INDEX_BOUND_BYTE;
-
-    // ce = cache_acquire(inode->data.doubly_indirect);
-    // cache_read_ptr(ce);
-    // bounce = ce->data;
 
     uint32_t i1_id = pos / (BLOCK_SECTOR_SIZE * 128);
     uint32_t i1_off = pos % (BLOCK_SECTOR_SIZE * 128);
@@ -233,19 +263,37 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos, int* 
     /* If doubly_indirect is no_sector, allocate new one */
     if (i2_id == NO_SECTOR) {
       if (is_read) {
+        // printf("release3\n");
         release_entry(ce2);
         return NO_SECTOR;
-      } else {
-        /* Create new data block and link to direct block */
-        allocate_free_index_block(&bounce[i1_id]);
-        i2_id = bounce[i1_id];
-        // block_write(fs_device, inode->data.doubly_indirect, bounce); // write back first block
-        write_entry(ce2, bounce);
-        // cache_write(ce, bounce, BLOCK_SECTOR_SIZE);
-      }
-    }
-    release_entry(ce2);
 
+      } else {
+        block_sector_t prev = bounce[i1_id];
+        release_entry(ce2);
+
+        block_sector_t new_id;
+        /* Create new data block and link to direct block */
+        allocate_free_index_block(&new_id);
+
+        ce2 = acquire_entry(fs_device, inode->data.doubly_indirect);
+        bounce = ce2->data;
+        if (prev != bounce[i1_id]) {
+          i2_id = bounce[i1_id];
+          release_entry(ce2);
+          /* No lock held when releasing */
+          release_free_block(new_id);
+        } else {
+          i2_id = bounce[i1_id] = new_id;
+          write_entry(ce2, bounce);
+          release_entry(ce2);
+        }
+        // block_write(fs_device, inode->data.doubly_indirect, bounce); // write back first block
+      }
+    } else {
+      release_entry(ce2);
+    }
+
+    // printf("acquire3\n");
     struct cache_entry* ce3 = acquire_entry(fs_device, i2_id);
     bounce = ce3->data;
     // block_read(fs_device, i2_id, bounce); // second block
@@ -253,30 +301,43 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos, int* 
     // cache_release(ce);
 
     /* 4. Find id of actual data block and create if needed */
-    // ce = cache_acquire(i2_id);
-    // cache_read_ptr(ce);`1qq2
-    // bounce = ce->data;
-
     uint32_t db_id = i1_off / BLOCK_SECTOR_SIZE;
     *sector_ofs = i1_off % BLOCK_SECTOR_SIZE;
-
     if (bounce[db_id] == NO_SECTOR) {
       if (is_read) {
+        // printf("release6\n");
         release_entry(ce3);
         return NO_SECTOR;
       } else {
         /* Create new data block and link to direct block */
-        allocate_free_data_block(&bounce[db_id]);
-        write_entry(ce3, bounce);
+        block_sector_t prev = bounce[db_id];
+        release_entry(ce3);
+
+        block_sector_t new_id;
+        allocate_free_data_block(&new_id);
+
+        ce3 = acquire_entry(fs_device, i2_id);
+        bounce = ce3->data;
+        if (prev != bounce[db_id]) {
+          b_id = bounce[db_id];
+          release_entry(ce3);
+          /* No lock held when releasing */
+          release_free_block(new_id);
+        } else {
+          b_id = bounce[db_id] = new_id;
+          write_entry(ce3, bounce);
+          release_entry(ce3);
+        }
 
         // block_write(fs_device, i2_id, bounce);
         // cache_write(ce, bounce, BLOCK_SECTOR_SIZE);
       }
+    } else {
+      b_id = bounce[db_id];
+      release_entry(ce3);
     }
-    b_id = bounce[db_id];
-    release_entry(ce3);
 
-    // printf("bid: %d, dbid: %d, from doulbuy llist\n", b_id, db_id);
+    // printf("bid: %u, dbid: %d, from doulbuy llist\n", b_id, db_id);
     // cache_release(ce);
 
     // if (bounce) {
@@ -335,11 +396,11 @@ bool inode_create_with_zero_first(block_sector_t sector, off_t size) {
     disk_inode->doubly_indirect = disk_inode->indirect = NO_SECTOR;
 
     /* Only write one free inode space to block */
-    // static char zeros[BLOCK_SECTOR_SIZE];
-    // struct cache_entry* ce = cache_acquire(sector);
-    // cache_write(ce, disk_inode, BLOCK_SECTOR_SIZE);
-    // cache_release(ce);
-    block_write(fs_device, sector, disk_inode);
+
+    // block_write(fs_device, sector, disk_inode);
+    struct cache_entry* ce1 = acquire_entry(fs_device, sector);
+    write_entry(ce1, disk_inode);
+    release_entry(ce1);
 
     success = true;
     free(disk_inode);
@@ -381,10 +442,12 @@ bool inode_create(block_sector_t sector, off_t length) {
 
         for (i = 0; i < sectors; i++) {
           /* Write data */
-          // ce = cache_acquire(disk_inode->start + i);
-          // cache_write(ce, zeros, BLOCK_SECTOR_SIZE);
-          // cache_release(ce);
-          block_write(fs_device, disk_inode->start + i, zeros);
+          // block_write(fs_device, disk_inode->start + i, zeros);
+
+          struct cache_entry* ce1 = acquire_entry(fs_device, disk_inode->start + i);
+          write_entry(ce1, zeros);
+          release_entry(ce1);
+
           /* Write idnex */
           disk_inode->direct[i] = disk_inode->start + i;
         }
@@ -392,10 +455,11 @@ bool inode_create(block_sector_t sector, off_t length) {
         disk_inode->indirect = NO_SECTOR;
         disk_inode->doubly_indirect = NO_SECTOR;
 
-        // ce = cache_acquire(sector);
-        // cache_write(ce, zeros, BLOCK_SECTOR_SIZE);
-        // cache_release(ce);
-        block_write(fs_device, sector, disk_inode);
+        // block_write(fs_device, sector, disk_inode);
+
+        struct cache_entry* ce1 = acquire_entry(fs_device, sector);
+        write_entry(ce1, disk_inode);
+        release_entry(ce1);
       }
       success = true;
     }
@@ -408,6 +472,7 @@ bool inode_create(block_sector_t sector, off_t length) {
    and returns a `struct inode' that contains it.
    Returns a null pointer if memory allocation fails. */
 struct inode* inode_open(block_sector_t sector) {
+  // printf("inode open with sector: %u\n", sector);
   struct list_elem* e;
   struct inode* inode;
 
@@ -432,7 +497,10 @@ struct inode* inode_open(block_sector_t sector) {
   inode->deny_write_cnt = 0;
   inode->removed = false;
 
-  block_read(fs_device, inode->sector, &inode->data);
+  // block_read(fs_device, inode->sector, &inode->data);
+  struct cache_entry* ce1 = acquire_entry(fs_device, inode->sector);
+  read_entry(ce1, &inode->data);
+  release_entry(ce1);
   return inode;
 }
 
@@ -483,24 +551,21 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
   // printf("entering inode_read_At size = %lu, offset = %lu\n", size, offset);
   uint8_t* buffer = buffer_;
   off_t bytes_read = 0;
-  uint8_t* bounce = malloc(BLOCK_SECTOR_SIZE);
-  if (!bounce) {
-    return -1;
-  }
+  uint8_t* bounce = NULL;
+  // uint8_t* bounce = malloc(BLOCK_SECTOR_SIZE);
+  // if (!bounce) {
+  //   return -1;
+  // }
   // struct cache_entry* ce = NULL;
   uint8_t* p = NULL;
 
   while (size > 0) {
-    printf("keep reading with size = %lu\n", size);
+    // printf("keep reading with size = %lu\n", size);
     /* Disk sector to read, starting byte offset within sector. */
     int sector_ofs;
     block_sector_t sector_idx = byte_to_sector(inode, offset, &sector_ofs, true);
     // printf("sector idx == %lu\n", sector_idx);
     /* Break if sector_idx == NO_SECTOR */
-
-    // if (sector_idx == NO_SECTOR) {
-    //   break;
-    // }
 
     // printf("keep reading with size = %lu, and id = %lu\n", size, sector_idx);
     /* Number of bytes to actually copy out of this sector: Block Size - sector_ofs */
@@ -515,26 +580,20 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
       break;
 
     } else if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE) {
-      // ce = cache_acquire(sector_idx);
-      // memset(ce->data, 0, BLOCK_SECTOR_SIZE);
-      // cache_read_ptr(ce);
-      // p = ce->data;
-      block_read(fs_device, sector_idx, bounce);
+      // block_read(fs_device, sector_idx, bounce);
+      struct cache_entry* ce = acquire_entry(fs_device, sector_idx);
+      bounce = ce->data;
 
       memcpy(buffer + bytes_read, bounce + sector_ofs, chunk_size);
-      // cache_release(ce);
+      release_entry(ce);
     } else {
-      // ce = cache_acquire(sector_idx);
-      // memset(ce->data, 0, BLOCK_SECTOR_SIZE);
-      // cache_read_ptr(ce);
-      // uint8_t* p = ce->data;
 
-      // memcpy(buffer + bytes_read, p + sector_ofs, chunk_size);
-      // cache_release(ce);
-      /* Read sector into bounce buffer, then partially copy
-            into caller's buffer. */
-      block_read(fs_device, sector_idx, bounce);
+      // block_read(fs_device, sector_idx, bounce);
+      struct cache_entry* ce = acquire_entry(fs_device, sector_idx);
+      bounce = ce->data;
+
       memcpy(buffer + bytes_read, bounce + sector_ofs, chunk_size);
+      release_entry(ce);
     }
 
     /* Advance. */
@@ -542,8 +601,8 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
     offset += chunk_size;
     bytes_read += chunk_size;
   }
-  if (bounce)
-    free(bounce);
+  // if (bounce)
+  //   free(bounce);
 
   // printf("bytes_read: %lu\n", bytes_read);
   return bytes_read;
@@ -602,9 +661,10 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
 off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t offset) {
   const uint8_t* buffer = buffer_;
   off_t bytes_written = 0;
-  uint8_t* bounce = malloc(BLOCK_SECTOR_SIZE);
-  if (bounce == NULL)
-    return -1;
+  uint8_t* bounce = NULL;
+  // uint8_t* bounce = malloc(BLOCK_SECTOR_SIZE);
+  // if (bounce == NULL)
+  //   return -1;
   // struct cache_entry* ce = NULL;
 
   if (inode->deny_write_cnt)
@@ -623,7 +683,7 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
     if (sector_idx == NO_SECTOR) {
       break;
     }
-    printf("byte to sectot success with sector_idx: %u\n", sector_idx);
+    // printf("byte to sectot success with sector_idx: %u\n", sector_idx);
     int chunk_size = BLOCK_SECTOR_SIZE - sector_ofs;
     chunk_size = chunk_size < size ? chunk_size : size;
 
@@ -633,45 +693,38 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
       break;
 
     if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE) {
-      // ce = cache_acquire(sector_idx);
-      // cache_write(ce, buffer + bytes_written, BLOCK_SECTOR_SIZE);
-      // cache_release(ce);
-      block_write(fs_device, sector_idx, buffer + bytes_written);
+      struct cache_entry* ce = acquire_entry(fs_device, sector_idx);
+      // printf("acquire success1\n");
+      write_entry(ce, buffer + bytes_written);
+
+      release_entry(ce);
+      // printf("release success1\n");
+
+      // block_write(fs_device, sector_idx, buffer + bytes_written);
     } else {
-      // ce = cache_acquire(sector_idx);
-      // cache_write(ce, buffer + bytes_written, chunk_size);
-      // cache_release(ce);
-
-      // if (use_cache) {
-      //   /* Logic with buffer cache */
-      //   /* If the sector contains data before or after the chunk
-      //         we're writing, then we need to read in the sector
-      //         first.  Otherwise we start with a sector of all zeros. */
-      //   // if (sector_ofs > 0 || chunk_size < BLOCK_SECTOR_SIZE)
-      //   cache_read(sector_idx, bounce);
-      //   printf("bounce: %p\n", bounce);
-      //   // else
-      //     // memset(bounce, 0, BLOCK_SECTOR_SIZE);
-      //   if (bounce) {
-      //     memcpy(bounce + sector_ofs, buffer + bytes_written, chunk_size);
-      //   } else {
-      //     bounce = buffer;
-      //   }
-      //   cache_write(sector_idx, bounce);
-      // } else {
-      /* Logic w/o buffer cache */
-      /* We need a bounce buffer. */
-
       /* If the sector contains data before or after the chunk
                we're writing, then we need to read in the sector
                first.  Otherwise we start with a sector of all zeros. */
-      if (sector_ofs > 0 || chunk_size < BLOCK_SECTOR_SIZE)
-        block_read(fs_device, sector_idx, bounce);
-      else
-        memset(bounce, 0, BLOCK_SECTOR_SIZE);
+      struct cache_entry* ce = acquire_entry(fs_device, sector_idx);
+      // printf("acquire success2\n");
+      if (sector_ofs > 0 || chunk_size < BLOCK_SECTOR_SIZE) {
+        bounce = ce->data;
+        memcpy(bounce + sector_ofs, buffer + bytes_written, chunk_size);
+        write_entry(ce, bounce);
+        release_entry(ce);
+        // printf("release success2\n");
+      } else {
+        bounce = calloc(BLOCK_SECTOR_SIZE, 1);
+        // memset(bounce, 0, BLOCK_SECTOR_SIZE);
+        memcpy(bounce + sector_ofs, buffer + bytes_written, chunk_size);
+        write_entry(ce, bounce);
+        release_entry(ce);
+        // printf("release success2.\n");
+        free(bounce);
+      }
 
-      memcpy(bounce + sector_ofs, buffer + bytes_written, chunk_size);
-      block_write(fs_device, sector_idx, bounce);
+      // memcpy(bounce + sector_ofs, buffer + bytes_written, chunk_size);
+      // block_write(fs_device, sector_idx, bounce);
     }
     // }
 
@@ -685,13 +738,13 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
     bytes_written += chunk_size;
   }
 
-  if (bounce)
-    free(bounce);
-  // /* Logic with buffer cache */
-  // ce = cache_acquire(inode->sector);
-  // cache_write(ce, &inode->data, BLOCK_SECTOR_SIZE);
-  // cache_release(ce);
-  block_write(fs_device, inode->sector, &inode->data);
+  // if (bounce)
+  //   free(bounce);
+  // block_write(fs_device, inode->sector, &inode->data);
+  struct cache_entry* ce1 = acquire_entry(fs_device, inode->sector);
+  ASSERT(sizeof(inode->data) == BLOCK_SECTOR_SIZE);
+  write_entry(ce1, &inode->data);
+  release_entry(ce1);
 
   return bytes_written;
 }

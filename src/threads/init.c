@@ -39,6 +39,7 @@
 #include "devices/ide.h"
 #include "filesys/filesys.h"
 #include "filesys/fsutil.h"
+#include "filesys/buffer-cache.h"
 #endif
 
 /* Page directory with kernel mappings only. */
@@ -311,6 +312,7 @@ static void run_task(char** argv) {
   const char* task = argv[1];
   printf("task: %s\n", task);
   printf("Executing '%s':\n", task);
+  // cache_flush_all();
 #ifdef USERPROG
   process_wait(process_execute(task));
 #endif
