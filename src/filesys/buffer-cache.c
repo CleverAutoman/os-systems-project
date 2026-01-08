@@ -57,72 +57,82 @@ static struct cache_entry* find_victim() {
     i = bc.hand;
 
     /* Find next invalid or victim entry */
+    if (bc.ce[i].busy) {
+      bc.hand = (bc.hand + 1) % CACHE_SIZE;
+      continue;
+    }
+
     if (!bc.ce[i].valid || !bc.ce[i].accessed) {
-      // if (!bc.ce[i].accessed) {
-      //   /* TODO: We need to flush back this cache entry */
-      //   if (bc.ce[i].dirty) {
-      //     flush_block(&bc.ce[i]);
-      //   }
-      // }
       bc.hand = (bc.hand + 1) % CACHE_SIZE;
       return &bc.ce[i];
     } else {
       bc.ce[i].accessed = false;
     }
 
-    bc.hand += 1;
-    if (bc.hand == CACHE_SIZE) {
-      bc.hand = 0;
-    }
+    bc.hand = (bc.hand + 1) % CACHE_SIZE;
   }
 }
 
 /* Opening and closing buffer. */
 struct cache_entry* acquire_entry(struct block* block, block_sector_t sector) {
-  /* First try to hold global lock until release entry */
-  // printf("ready to acquire lock\n");
   lock_acquire(&bc.global_lock);
-  // printf("acquire lock success\n");
 
-  /* 1. Return entry if has one in the list */
-  struct cache_entry* ce = NULL;
+  /* hit */
   for (int i = 0; i < CACHE_SIZE; i++) {
-    if (bc.ce[i].valid && bc.ce[i].sector == sector && bc.ce[i].block == block) {
-      ce = &bc.ce[i];
-      break;
+    struct cache_entry* ce = &bc.ce[i];
+    if (ce->valid && ce->sector == sector && ce->block == block) {
+      while (ce->busy)
+        cond_wait(&ce->busy_cond, &bc.global_lock);
+
+      ce->busy = true;
+      ce->accessed = true;
+      lock_release(&bc.global_lock);
+
+      lock_acquire(&ce->entry_lock);
+      return ce;
     }
   }
-  if (ce) {
-    /* Set current cache entry to accessed */
-    ce->accessed = true;
-    /* Make sure lock is held before return */
-    return ce;
-  }
 
-  /* 2. We need to find a victim for this sector id */
-  ce = find_victim();
-  if (ce->valid && ce->dirty) {
+  /* miss */
+  struct cache_entry* ce = find_victim();
+  ce->busy = true;
+  lock_release(&bc.global_lock);
+
+  lock_acquire(&ce->entry_lock);
+
+  if (ce->valid && ce->dirty)
     flush_block(ce);
-  }
-  /* Set current cache entry to accessed */
+
   ce->block = block;
   ce->sector = sector;
 
-  block_read(ce->block, ce->sector, ce->data);
-  ce->valid = true;
-  ce->accessed = true;
-  ce->dirty = false;
+  lock_release(&ce->entry_lock);
 
-  /* Make sure lock is held before return */
+  /* do i/o without entry-lock */
+  block_read(block, sector, ce->data);
+
+  lock_acquire(&ce->entry_lock);
+  ce->valid = true;
+  ce->dirty = false;
+  ce->accessed = true;
+
+  lock_release(&ce->entry_lock);
+
+  lock_acquire(&bc.global_lock);
+  ce->busy = false;
+  cond_broadcast(&ce->busy_cond, &bc.global_lock);
+  lock_release(&bc.global_lock);
+
+  lock_acquire(&ce->entry_lock);
   return ce;
 }
 
-struct cache_entry* release_entry(struct cache_entry* ce) {
-  ASSERT(ce->magic == ENTRY_MAGIC);
-  /* Release all locks held by current entry */
-  /* Currently, just use global lock */
+void release_entry(struct cache_entry* ce) {
+  lock_release(&ce->entry_lock);
+  lock_acquire(&bc.global_lock);
+  ce->busy = false;
+  cond_broadcast(&ce->busy_cond, &bc.global_lock);
   lock_release(&bc.global_lock);
-  // printf("release lock success\n");
 }
 
 /* Reading and writing. Assuming entry lock is held  */

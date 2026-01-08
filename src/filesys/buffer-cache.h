@@ -46,7 +46,7 @@ void cache_init(void);
 
 /* Opening and closing buffer. */
 struct cache_entry* acquire_entry(struct block*, block_sector_t);
-struct cache_entry* release_entry(struct cache_entry*);
+void release_entry(struct cache_entry*);
 
 /* Reading and writing. */
 void read_entry(struct cache_entry*, void*);
