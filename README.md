@@ -99,11 +99,9 @@ and added a **buffer cache** using the **Second-Chance Clock** eviction algorith
 **Result Summary:**
 > 1. **FFS consistently outperforms FAT across both sequential and random read workloads.**  
    Under all evaluated scenarios, FFS demonstrates clear performance advantages over FAT, achieving speedups ranging from **2.23× to 3.76×**.
-
-> 2. **FFS performs significantly better on small-file access patterns.**  
+  2. **FFS performs significantly better on small-file access patterns.**  
    For tiny files (50B), FFS achieves substantial gains over bigger files (100B) in both sequential and random access, indicating more efficient handling of small-file metadata.
-
-> 3. **Small-file randomly access yields the largest overall filesystem speedup.**  
+  3. **Small-file randomly access yields the largest overall filesystem speedup.**  
    When multiple small files are accessed in a non-sequential order, which is similar to a common real-world workload, FFS shows the greatest performance improvements (up to **3.76×**), highlighting its strength in directory-level locality and metadata organization.
 
 
@@ -124,8 +122,7 @@ and added a **buffer cache** using the **Second-Chance Clock** eviction algorith
 
 **Result Summary:**
 > I also evaluated the per-entry lock + `busy` condition–based design. Although this design reduces global-lock holding time and is more suitable for concurrent workloads, Pintos executes the filesystem in a **single-threaded** context. Consequently, the additional locking and condition-variable overhead outweighed its benefits, resulting in a slightly higher execution time of **203 ticks** than **188 ticks**.
-
-> Therefore, the global-lock design was chosen as the final implementation to achieve the best performance under Pintos’ execution model.
+  Therefore, the global-lock design was chosen as the final implementation to achieve the best performance under Pintos’ execution model.
 
 ---
 
